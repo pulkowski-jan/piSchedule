@@ -5,8 +5,6 @@ import org.pischedule.transit.Departure;
 import org.pischedule.transit.TransitSnapshot;
 import org.pischedule.weather.WeatherSnapshot;
 
-import javax.swing.*;
-import javax.swing.Timer;
 import java.awt.*;
 import java.time.Duration;
 import java.time.Instant;
@@ -16,6 +14,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.List;
 import java.util.regex.Pattern;
+
+import javax.swing.*;
+import javax.swing.Timer;
 
 /**
  * A single, passive view. All changes to its immutable snapshots happen on the EDT.
@@ -76,7 +77,8 @@ public final class DashboardView extends JPanel {
 
     private static void requireEdt() {
         if (!SwingUtilities.isEventDispatchThread()) {
-            throw new IllegalStateException("Dashboard updates must run on the Swing event-dispatch thread");
+            throw new IllegalStateException(
+                    "Dashboard updates must run on the Swing event-dispatch thread");
         }
     }
 
@@ -89,9 +91,14 @@ public final class DashboardView extends JPanel {
 
         Graphics2D g = (Graphics2D) graphics.create();
         try {
-            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-            DashboardLayout layout = DashboardLayout.calculate(
-                    getWidth(), getHeight(), display.textScale(), hasText(weather.status()));
+            g.setRenderingHint(
+                    RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            DashboardLayout layout =
+                    DashboardLayout.calculate(
+                            getWidth(),
+                            getHeight(),
+                            display.textScale(),
+                            hasText(weather.status()));
             Instant now = Instant.now();
 
             drawHeader(g, layout);
@@ -132,9 +139,15 @@ public final class DashboardView extends JPanel {
         // The clock font is also the original glyph-availability check for the icon.
         String icon = join(weather.icon(), weather.condition());
         String text = join(weather.temperature(), icon);
-        text = text.isBlank() || !weather.status().isBlank() ? fallbackWeatherText() : join(weatherLocation, text);
+        text =
+                text.isBlank() || !weather.status().isBlank()
+                        ? fallbackWeatherText()
+                        : join(weatherLocation, text);
 
-        int left = Math.min(layout.width() - layout.margin(), layout.clockWidth() + 2 * layout.margin());
+        int left =
+                Math.min(
+                        layout.width() - layout.margin(),
+                        layout.clockWidth() + 2 * layout.margin());
         int right = layout.width() - layout.margin();
         g.setFont(font(Font.BOLD, Math.min(layout.headerHeight() * 0.36, 22 * layout.scale())));
         g.setColor(TEXT);
@@ -159,7 +172,8 @@ public final class DashboardView extends JPanel {
     private void drawDepartures(Graphics2D g, DashboardLayout layout, Instant now) {
         List<List<Departure>> upcoming = departureGroups(transit.departures(), now);
         List<List<List<Departure>>> rows = departureRows(upcoming, display.departureLimit());
-        List<Integer> heights = rowHeights(layout.available(), layout.minimumRowHeight(), rows.size());
+        List<Integer> heights =
+                rowHeights(layout.available(), layout.minimumRowHeight(), rows.size());
         if (heights.isEmpty()) {
             drawEmptyDepartures(g, layout, !upcoming.isEmpty());
             return;
@@ -176,9 +190,18 @@ public final class DashboardView extends JPanel {
     private void drawEmptyDepartures(Graphics2D g, DashboardLayout layout, boolean hasUpcoming) {
         if (layout.available() <= 15) return;
         g.setColor(MUTED);
-        g.setFont(font(Font.PLAIN, Math.min(20 * layout.scale(), Math.max(12, layout.available() * 0.35))));
-        int baseline = layout.rowsTop() + Math.min(layout.minimumRowHeight() - 4, layout.available() - 2);
-        drawClipped(g, emptyDeparturesMessage(hasUpcoming), layout.margin(), baseline, layout.innerWidth());
+        g.setFont(
+                font(
+                        Font.PLAIN,
+                        Math.min(20 * layout.scale(), Math.max(12, layout.available() * 0.35))));
+        int baseline =
+                layout.rowsTop() + Math.min(layout.minimumRowHeight() - 4, layout.available() - 2);
+        drawClipped(
+                g,
+                emptyDeparturesMessage(hasUpcoming),
+                layout.margin(),
+                baseline,
+                layout.innerWidth());
     }
 
     private String emptyDeparturesMessage(boolean hasUpcoming) {
@@ -186,14 +209,22 @@ public final class DashboardView extends JPanel {
         String state = transit.status() == null ? "" : transit.status().toLowerCase(Locale.ROOT);
         if (state.contains("loading")) return "Loading departures…";
         if (state.contains("expired")) return "Timetable expired";
-        if (state.contains("unavailable") || state.contains("failed") || state.contains("no cache")) {
+        if (state.contains("unavailable")
+                || state.contains("failed")
+                || state.contains("no cache")) {
             return "Departures unavailable";
         }
         return "No upcoming departures";
     }
 
-    private void drawDepartureRow(Graphics2D g, List<List<Departure>> groups, DashboardLayout layout, Instant now,
-                                  int index, int y, int height) {
+    private void drawDepartureRow(
+            Graphics2D g,
+            List<List<Departure>> groups,
+            DashboardLayout layout,
+            Instant now,
+            int index,
+            int y,
+            int height) {
         int contentHeight = Math.min(height, layout.preferredRowHeight());
         int contentY = y + (height - contentHeight) / 2;
         if ((index & 1) == 0) {
@@ -202,8 +233,16 @@ public final class DashboardView extends JPanel {
         }
 
         for (int column = 0; column < groups.size(); column++) {
-            drawDepartureGroup(g, groups.get(column), now, layout.columnX(column), contentY,
-                    layout.columnWidth(), contentHeight, layout.scale(), layout.margin());
+            drawDepartureGroup(
+                    g,
+                    groups.get(column),
+                    now,
+                    layout.columnX(column),
+                    contentY,
+                    layout.columnWidth(),
+                    contentHeight,
+                    layout.scale(),
+                    layout.margin());
         }
     }
 
@@ -213,7 +252,8 @@ public final class DashboardView extends JPanel {
         boolean weatherWarning = hasText(weather.status());
         String text = transitWarning ? "Scheduled · " + transit.status() : "Scheduled";
         int bottomBaseline = layout.height() - Math.max(5, layout.margin() / 2);
-        int transitBaseline = bottomBaseline - (weatherWarning ? g.getFontMetrics().getHeight() : 0);
+        int transitBaseline =
+                bottomBaseline - (weatherWarning ? g.getFontMetrics().getHeight() : 0);
 
         g.setColor(transitWarning ? WARNING : MUTED);
         drawClipped(g, text, layout.margin(), transitBaseline, layout.innerWidth());
@@ -226,13 +266,21 @@ public final class DashboardView extends JPanel {
     /**
      * All panel geometry is calculated in one place, independently of drawing.
      */
-    private record DashboardLayout(int width, int height, double scale, int margin,
-                                   int headerHeight, int titleHeight, int available) {
-        static DashboardLayout calculate(int width, int height, double scale, boolean weatherWarning) {
+    private record DashboardLayout(
+            int width,
+            int height,
+            double scale,
+            int margin,
+            int headerHeight,
+            int titleHeight,
+            int available) {
+        static DashboardLayout calculate(
+                int width, int height, double scale, boolean weatherWarning) {
             int margin = Math.max(6, Math.round(width * 0.018f));
             int header = Math.max(44, Math.min(height / 4, (int) (height * 0.18)));
             int title = Math.max(32, Math.min(height / 4, (int) (38 * scale)));
-            int footer = Math.max(25, Math.min(height / 4, (int) ((weatherWarning ? 42 : 27) * scale)));
+            int footer =
+                    Math.max(25, Math.min(height / 4, (int) ((weatherWarning ? 42 : 27) * scale)));
             int available = Math.max(0, height - header - title - footer - margin);
             return new DashboardLayout(width, height, scale, margin, header, title, available);
         }
@@ -254,7 +302,9 @@ public final class DashboardView extends JPanel {
         }
 
         int minimumRowHeight() {
-            return available >= MINIMUM_ROW_HEIGHT ? Math.min(preferredRowHeight(), available) : preferredRowHeight();
+            return available >= MINIMUM_ROW_HEIGHT
+                    ? Math.min(preferredRowHeight(), available)
+                    : preferredRowHeight();
         }
 
         int columnWidth() {
@@ -266,20 +316,30 @@ public final class DashboardView extends JPanel {
         }
     }
 
-    private void drawDepartureGroup(Graphics2D graphics, List<Departure> group, Instant now,
-                                    int x, int y, int width, int height, double scale, int margin) {
+    private void drawDepartureGroup(
+            Graphics2D graphics,
+            List<Departure> group,
+            Instant now,
+            int x,
+            int y,
+            int width,
+            int height,
+            double scale,
+            int margin) {
         if (width <= 0) return;
         Graphics2D g = (Graphics2D) graphics.create(x, y, width, height - 2);
         try {
             int padding = Math.max(4, margin / 2);
-            int lineWidth = Math.min(Math.max(28, (int) (width * 0.12)), Math.max(0, width - padding * 2));
+            int lineWidth =
+                    Math.min(Math.max(28, (int) (width * 0.12)), Math.max(0, width - padding * 2));
             int headingX = padding + lineWidth;
             int headingWidth = Math.max(0, width - headingX - padding);
 
             g.setFont(font(Font.BOLD, Math.min(height * 0.34, 23 * scale)));
             g.setColor(ACCENT);
             shrinkFontToFit(g, group.get(0).line(), Math.max(0, lineWidth - padding), 10);
-            drawClipped(g, group.get(0).line(), padding, headingBaseline(height), lineWidth - padding);
+            drawClipped(
+                    g, group.get(0).line(), padding, headingBaseline(height), lineWidth - padding);
 
             if (headingWidth > 0) {
                 Graphics2D heading = (Graphics2D) g.create(headingX, 0, headingWidth, height - 2);
@@ -303,17 +363,26 @@ public final class DashboardView extends JPanel {
         }
     }
 
-    private void drawGroupHeading(Graphics2D g, Departure first, int width, int height, double scale) {
+    private void drawGroupHeading(
+            Graphics2D g, Departure first, int width, int height, double scale) {
         g.setColor(TEXT);
         g.setFont(font(Font.PLAIN, Math.min(height * 0.30, 21 * scale)));
-        String heading = join(first.destination(), boardingLabel(first.stopName(), first.platform()));
+        String heading =
+                join(first.destination(), boardingLabel(first.stopName(), first.platform()));
         shrinkFontToFit(g, heading, width, 14);
-        g.drawString(fitDestination(g.getFontMetrics(), first.destination(), first.stopName(),
-                first.platform(), width), 0, headingBaseline(height));
+        g.drawString(
+                fitDestination(
+                        g.getFontMetrics(),
+                        first.destination(),
+                        first.stopName(),
+                        first.platform(),
+                        width),
+                0,
+                headingBaseline(height));
     }
 
-    private void drawGroupTimes(Graphics2D g, List<Departure> group, Instant now,
-                                int width, int height, double scale) {
+    private void drawGroupTimes(
+            Graphics2D g, List<Departure> group, Instant now, int width, int height, double scale) {
         String times = departureTimes(group, now);
         g.setFont(font(Font.BOLD, Math.min(height * 0.28, 19 * scale)));
         shrinkFontToFit(g, times, width, 10);
@@ -330,7 +399,8 @@ public final class DashboardView extends JPanel {
     }
 
     private static void shrinkFontToFit(Graphics2D g, String text, int width, float minimumSize) {
-        while (g.getFontMetrics().stringWidth(text) > width && g.getFont().getSize2D() > minimumSize) {
+        while (g.getFontMetrics().stringWidth(text) > width
+                && g.getFont().getSize2D() > minimumSize) {
             g.setFont(g.getFont().deriveFont(Math.max(minimumSize, g.getFont().getSize2D() - 1)));
         }
     }
@@ -359,7 +429,10 @@ public final class DashboardView extends JPanel {
             if (sameBoardingDetails(next, first)) {
                 times.add(countdown(now, next.time()));
             } else if (Objects.equals(first.destination(), next.destination())) {
-                times.add(join(countdown(now, next.time()), boardingLabel(next.stopName(), next.platform())));
+                times.add(
+                        join(
+                                countdown(now, next.time()),
+                                boardingLabel(next.stopName(), next.platform())));
             }
         }
         return String.join(TIME_SEPARATOR, times);
@@ -389,12 +462,16 @@ public final class DashboardView extends JPanel {
      */
     static List<List<Departure>> departureGroups(List<Departure> departures, Instant now) {
         Map<GroupKey, List<Departure>> groups = new LinkedHashMap<>();
-        departures.stream().filter(departure -> isVisible(departure, now))
-                .sorted(Comparator.comparing(Departure::time).thenComparing(Departure::line)
-                        .thenComparing(Departure::destination))
+        departures.stream()
+                .filter(departure -> isVisible(departure, now))
+                .sorted(
+                        Comparator.comparing(Departure::time)
+                                .thenComparing(Departure::line)
+                                .thenComparing(Departure::destination))
                 .forEach(departure -> {
                     GroupKey key = GroupKey.of(departure);
-                    List<Departure> group = groups.computeIfAbsent(key, ignored -> new ArrayList<>());
+                    List<Departure> group =
+                            groups.computeIfAbsent(key, ignored -> new ArrayList<>());
                     if (group.size() < TIMES_PER_GROUP) {
                         group.add(departure);
                     }
@@ -403,7 +480,8 @@ public final class DashboardView extends JPanel {
     }
 
     private static boolean isVisible(Departure departure, Instant now) {
-        return departure.isVisibleAt(now) && departure.time().isBefore(now.plus(121, ChronoUnit.MINUTES));
+        return departure.isVisibleAt(now)
+                && departure.time().isBefore(now.plus(121, ChronoUnit.MINUTES));
     }
 
     private record GroupKey(String line, Integer direction, String destination) {
@@ -427,11 +505,14 @@ public final class DashboardView extends JPanel {
     /**
      * Format and fit the destination while keeping the boarding point after it.
      */
-    static String fitDestination(FontMetrics metrics, String destination, String stopName, String platform, int width) {
+    static String fitDestination(
+            FontMetrics metrics, String destination, String stopName, String platform, int width) {
         if (width <= 0) return "";
         String direction = bounded(destination).strip();
-        String name = KRAKOW_STOP_CODE_PATTERN.matcher(bounded(platform).strip()).matches()
-                ? bounded(stopName).strip() : "";
+        String name =
+                KRAKOW_STOP_CODE_PATTERN.matcher(bounded(platform).strip()).matches()
+                        ? bounded(stopName).strip()
+                        : "";
         String point = shortPlatform(platform);
         String label = boardingLabel(stopName, platform);
         String full = join(direction, label);
@@ -441,8 +522,10 @@ public final class DashboardView extends JPanel {
 
         int separatorWidth = metrics.stringWidth(" ");
         // Reserve some space for the direction as well as the boarding point.
-        int directionMinimum = Math.min(metrics.stringWidth(direction),
-                Math.max(metrics.stringWidth("…"), (width - separatorWidth) / 3));
+        int directionMinimum =
+                Math.min(
+                        metrics.stringWidth(direction),
+                        Math.max(metrics.stringWidth("…"), (width - separatorWidth) / 3));
         int labelBudget = width - separatorWidth - directionMinimum;
         if (labelBudget <= 0) return fit(metrics, full, width);
         String fittedLabel = fitBoardingLabel(metrics, name, point, labelBudget);
@@ -462,7 +545,8 @@ public final class DashboardView extends JPanel {
         return contents.isEmpty() ? "" : "(" + contents + ")";
     }
 
-    private static String fitBoardingLabel(FontMetrics metrics, String name, String point, int width) {
+    private static String fitBoardingLabel(
+            FontMetrics metrics, String name, String point, int width) {
         String contents = join(name, point);
         String label = contents.isEmpty() ? "" : "(" + contents + ")";
         if (metrics.stringWidth(label) <= width) return label;
@@ -508,7 +592,8 @@ public final class DashboardView extends JPanel {
         return minutes + " min";
     }
 
-    private static void drawRightClipped(Graphics2D g, String text, int left, int right, int baseline) {
+    private static void drawRightClipped(
+            Graphics2D g, String text, int left, int right, int baseline) {
         if (right <= left) return;
         String fitted = fit(g.getFontMetrics(), text, right - left);
         g.drawString(fitted, right - g.getFontMetrics().stringWidth(fitted), baseline);

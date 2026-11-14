@@ -5,6 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,11 +21,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
 
 class AppConfigTest {
     @TempDir Path temporaryDirectory;
@@ -60,44 +61,50 @@ class AppConfigTest {
         assertEquals(defaults.transit(), example.transit());
         assertEquals(defaults.weather(), example.weather());
         assertEquals(defaults.display(), example.display());
-        assertEquals(Path.of("config.example.toml").toAbsolutePath().getParent().resolve("cache"), example.cacheDirectory());
+        assertEquals(
+                Path.of("config.example.toml").toAbsolutePath().getParent().resolve("cache"),
+                example.cacheDirectory());
     }
 
     @Test
     void readsCustomizedSettingsIncludingPerLineFilters() throws IOException {
-        AppConfig config = load("""
-                cache_directory = "../store"
-                [transit]
-                url = "https://example.org/feed.zip"
-                update_interval_minutes = 30
-                stop_name = "Station"
-                stop_ids = ["p1", "p2"]
-                lines = ["8", "50.1"]
-                [transit.headsigns]
-                "8" = ["Destination A", "Destination B"]
-                "50.1" = []
-                [transit.direction_ids]
-                "8" = [0, 1]
-                [weather]
-                latitude = -90
-                longitude = 180
-                location = "Elsewhere"
-                units = "fahrenheit"
-                refresh_interval_minutes = 60
-                [display]
-                time_zone = "UTC"
-                time_format = "h:mm a"
-                full_screen = false
-                text_scale = 1.5
-                departure_limit = 12
-                """);
+        AppConfig config =
+                load(
+                        """
+                        cache_directory = "../store"
+                        [transit]
+                        url = "https://example.org/feed.zip"
+                        update_interval_minutes = 30
+                        stop_name = "Station"
+                        stop_ids = ["p1", "p2"]
+                        lines = ["8", "50.1"]
+                        [transit.headsigns]
+                        "8" = ["Destination A", "Destination B"]
+                        "50.1" = []
+                        [transit.direction_ids]
+                        "8" = [0, 1]
+                        [weather]
+                        latitude = -90
+                        longitude = 180
+                        location = "Elsewhere"
+                        units = "fahrenheit"
+                        refresh_interval_minutes = 60
+                        [display]
+                        time_zone = "UTC"
+                        time_format = "h:mm a"
+                        full_screen = false
+                        text_scale = 1.5
+                        departure_limit = 12
+                        """);
         assertEquals(temporaryDirectory.resolve("../store").normalize(), config.cacheDirectory());
         assertEquals("https://example.org/feed.zip", config.transit().url());
         assertEquals(Duration.ofMinutes(30), config.transit().updateInterval());
         assertEquals("Station", config.transit().stopName());
         assertEquals(List.of("p1", "p2"), config.transit().stopIds());
         assertEquals(List.of("8", "50.1"), config.transit().lines());
-        assertEquals(Map.of("8", List.of("Destination A", "Destination B"), "50.1", List.of()), config.transit().headsigns());
+        assertEquals(
+                Map.of("8", List.of("Destination A", "Destination B"), "50.1", List.of()),
+                config.transit().headsigns());
         assertEquals(Map.of("8", List.of(0, 1)), config.transit().directionIds());
         assertEquals(-90, config.weather().latitude());
         assertEquals(180, config.weather().longitude());
@@ -127,8 +134,15 @@ class AppConfigTest {
         List<Integer> ids = new ArrayList<>(List.of(0));
         Map<String, List<Integer>> directions = new LinkedHashMap<>();
         directions.put("8", ids);
-        AppConfig.Transit transit = new AppConfig.Transit("https://example.org", Duration.ofHours(1),
-                "Station", stops, List.of("8"), headsigns, directions);
+        AppConfig.Transit transit =
+                new AppConfig.Transit(
+                        "https://example.org",
+                        Duration.ofHours(1),
+                        "Station",
+                        stops,
+                        List.of("8"),
+                        headsigns,
+                        directions);
         stops.add("two");
         destinations.add("Other");
         ids.add(1);
@@ -136,7 +150,9 @@ class AppConfigTest {
         assertEquals(List.of("one"), transit.stopIds());
         assertEquals(Map.of("8", List.of("Center")), transit.headsigns());
         assertEquals(Map.of("8", List.of(0)), transit.directionIds());
-        assertThrows(UnsupportedOperationException.class, () -> transit.headsigns().get("8").add("Other"));
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> transit.headsigns().get("8").add("Other"));
         assertThrows(UnsupportedOperationException.class, () -> transit.directionIds().clear());
     }
 
@@ -153,8 +169,12 @@ class AppConfigTest {
                 Arguments.of("[transit]\nurl = 'ftp://example.org'", "transit.url"),
                 Arguments.of("[transit]\nurl = 'https:///missing-host'", "transit.url"),
                 Arguments.of("[transit]\nurl = 'https://example.org/#fragment'", "transit.url"),
-                Arguments.of("[transit]\nupdate_interval_minutes = 0", "transit.update_interval_minutes"),
-                Arguments.of("[transit]\nupdate_interval_minutes = 2147483648", "transit.update_interval_minutes"),
+                Arguments.of(
+                        "[transit]\nupdate_interval_minutes = 0",
+                        "transit.update_interval_minutes"),
+                Arguments.of(
+                        "[transit]\nupdate_interval_minutes = 2147483648",
+                        "transit.update_interval_minutes"),
                 Arguments.of("[transit]\nstop_name = ' '", "transit.stop_name"),
                 Arguments.of("[transit]\nstop_ids = [3]", "transit.stop_ids[0]"),
                 Arguments.of("[transit]\nlines = '8'", "transit.lines"),
@@ -165,7 +185,9 @@ class AppConfigTest {
                 Arguments.of("[weather]\nlatitude = 91", "weather.latitude"),
                 Arguments.of("[weather]\nlongitude = -181", "weather.longitude"),
                 Arguments.of("[weather]\nunits = 'kelvin'", "weather.units"),
-                Arguments.of("[weather]\nrefresh_interval_minutes = -1", "weather.refresh_interval_minutes"),
+                Arguments.of(
+                        "[weather]\nrefresh_interval_minutes = -1",
+                        "weather.refresh_interval_minutes"),
                 Arguments.of("[display]\ntime_zone = 'Not/AZone'", "display.time_zone"),
                 Arguments.of("[display]\ntime_format = 'HH:jj'", "display.time_format"),
                 Arguments.of("[display]\ntime_format = 'pH'", "display.time_format"),
@@ -184,6 +206,7 @@ class AppConfigTest {
     void reportsTomlSyntaxAndMissingFileErrors() throws IOException {
         IOException malformed = assertThrows(IOException.class, () -> load("[transit\n"));
         assertTrue(malformed.getMessage().contains("config.toml"));
-        assertThrows(IOException.class, () -> AppConfig.load(temporaryDirectory.resolve("absent.toml")));
+        assertThrows(
+                IOException.class, () -> AppConfig.load(temporaryDirectory.resolve("absent.toml")));
     }
 }

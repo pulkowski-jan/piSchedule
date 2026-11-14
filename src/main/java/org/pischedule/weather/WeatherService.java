@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import org.pischedule.config.AppConfig;
 
 import java.io.ByteArrayOutputStream;
@@ -44,12 +45,18 @@ public final class WeatherService {
     private static final Duration CLOCK_SKEW = Duration.ofMinutes(5);
     private static final Duration MINIMUM_MAX_AGE = Duration.ofMinutes(30);
     private static final String CACHE_FILE = "weather.json";
-    private static final ObjectMapper JSON = new ObjectMapper(JsonFactory.builder()
-            .streamReadConstraints(StreamReadConstraints.builder()
-                    .maxNestingDepth(32).maxStringLength(8192).maxNumberLength(64).build())
-            .build())
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper JSON =
+            new ObjectMapper(
+                            JsonFactory.builder()
+                                    .streamReadConstraints(
+                                            StreamReadConstraints.builder()
+                                                    .maxNestingDepth(32)
+                                                    .maxStringLength(8192)
+                                                    .maxNumberLength(64)
+                                                    .build())
+                                    .build())
+                    .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                    .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private final AppConfig.Weather config;
     private final Path cacheDirectory;
@@ -64,13 +71,18 @@ public final class WeatherService {
     }
 
     // Package-private seams allow deterministic, network-free tests.
-    WeatherService(AppConfig.Weather config, Path cacheDirectory, HttpTransport transport, Clock clock) {
+    WeatherService(
+            AppConfig.Weather config, Path cacheDirectory, HttpTransport transport, Clock clock) {
         this.config = Objects.requireNonNull(config, "config");
         this.cacheDirectory = Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.clock = Objects.requireNonNull(clock, "clock");
-        if (!Double.isFinite(config.latitude()) || config.latitude() < -90 || config.latitude() > 90
-                || !Double.isFinite(config.longitude()) || config.longitude() < -180 || config.longitude() > 180) {
+        if (!Double.isFinite(config.latitude())
+                || config.latitude() < -90
+                || config.latitude() > 90
+                || !Double.isFinite(config.longitude())
+                || config.longitude() < -180
+                || config.longitude() > 180) {
             throw new IllegalArgumentException("Invalid weather coordinates");
         }
         this.unit = Unit.parse(config.units());
@@ -84,7 +96,8 @@ public final class WeatherService {
         } catch (ArithmeticException ex) {
             twiceInterval = Duration.ofSeconds(Long.MAX_VALUE);
         }
-        this.maxAge = twiceInterval.compareTo(MINIMUM_MAX_AGE) < 0 ? MINIMUM_MAX_AGE : twiceInterval;
+        this.maxAge =
+                twiceInterval.compareTo(MINIMUM_MAX_AGE) < 0 ? MINIMUM_MAX_AGE : twiceInterval;
         // A cache has not yet been verified in this process, so expose it as stale
         // until a refresh succeeds, even when it is very recent.
         this.state = new AtomicReference<>(new State(loadCache(), true));
@@ -98,11 +111,18 @@ public final class WeatherService {
             return new WeatherSnapshot("", "", "", "Weather unavailable");
         }
         Reading reading = current.reading;
-        boolean stale = current.failed || tooOld(reading.fetchedAt, now) || tooOld(reading.observedAt, now)
-                || tooFarInFuture(reading.fetchedAt, now) || tooFarInFuture(reading.observedAt, now);
+        boolean stale =
+                current.failed
+                        || tooOld(reading.fetchedAt, now)
+                        || tooOld(reading.observedAt, now)
+                        || tooFarInFuture(reading.fetchedAt, now)
+                        || tooFarInFuture(reading.observedAt, now);
         Condition condition = conditionFor(reading.code, reading.day);
-        return new WeatherSnapshot(Math.round(reading.temperature) + unit.suffix,
-                condition.description, condition.icon, stale ? "Weather stale" : "");
+        return new WeatherSnapshot(
+                Math.round(reading.temperature) + unit.suffix,
+                condition.description,
+                condition.icon,
+                stale ? "Weather stale" : "");
     }
 
     /**
@@ -111,12 +131,16 @@ public final class WeatherService {
      */
     public synchronized void update() throws Exception {
         try {
-            HttpRequest request = HttpRequest.newBuilder(requestUri())
-                    .timeout(REQUEST_TIMEOUT)
-                    .header("Accept", "application/json")
-                    .GET().build();
+            HttpRequest request =
+                    HttpRequest.newBuilder(requestUri())
+                            .timeout(REQUEST_TIMEOUT)
+                            .header("Accept", "application/json")
+                            .GET()
+                            .build();
             Response response = transport.send(request);
-            if (response == null || response.status != 200 || response.body == null
+            if (response == null
+                    || response.status != 200
+                    || response.body == null
                     || response.body.length > MAX_BYTES) {
                 throw new IOException("Invalid weather HTTP response");
             }
@@ -145,10 +169,14 @@ public final class WeatherService {
     }
 
     private URI requestUri() {
-        return URI.create("https://api.open-meteo.com/v1/forecast?latitude="
-                + Double.toString(config.latitude()) + "&longitude=" + Double.toString(config.longitude())
-                + "&current=temperature_2m,weather_code,is_day&temperature_unit=" + unit.apiName
-                + "&timeformat=unixtime&timezone=GMT");
+        return URI.create(
+                "https://api.open-meteo.com/v1/forecast?latitude="
+                        + Double.toString(config.latitude())
+                        + "&longitude="
+                        + Double.toString(config.longitude())
+                        + "&current=temperature_2m,weather_code,is_day&temperature_unit="
+                        + unit.apiName
+                        + "&timeformat=unixtime&timezone=GMT");
     }
 
     private Reading parseProviderResponse(byte[] bytes, Instant fetchedAt) throws IOException {
@@ -193,9 +221,13 @@ public final class WeatherService {
                     || !unit.apiName.equals(requiredText(root, "units"))) {
                 return null;
             }
-            Reading reading = validateReading(requiredNumber(root, "temperature"),
-                    requiredInt(root, "code"), requiredInt(root, "is_day"),
-                    epochSeconds(root, "observed_at"), epochSeconds(root, "fetched_at"));
+            Reading reading =
+                    validateReading(
+                            requiredNumber(root, "temperature"),
+                            requiredInt(root, "code"),
+                            requiredInt(root, "is_day"),
+                            epochSeconds(root, "observed_at"),
+                            epochSeconds(root, "fetched_at"));
             if (tooFarInFuture(reading.observedAt, reading.fetchedAt)) {
                 return null;
             }
@@ -224,18 +256,25 @@ public final class WeatherService {
             Files.write(temporary, data);
             // Never fall back to a non-atomic replacement: a failed refresh must not
             // leave an existing last-success cache partially replaced.
-            Files.move(temporary, cacheDirectory.resolve(CACHE_FILE),
-                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(
+                    temporary,
+                    cacheDirectory.resolve(CACHE_FILE),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temporary);
         }
     }
 
-    private Reading validateReading(double temperature, int code, int day, Instant observedAt, Instant fetchedAt)
+    private Reading validateReading(
+            double temperature, int code, int day, Instant observedAt, Instant fetchedAt)
             throws IOException {
         // Reject non-finite and physically implausible temperatures rather than show garbage.
         double celsius = unit == Unit.CELSIUS ? temperature : (temperature - 32) * 5 / 9;
-        if (!Double.isFinite(temperature) || celsius < -120 || celsius > 80 || (day != 0 && day != 1)) {
+        if (!Double.isFinite(temperature)
+                || celsius < -120
+                || celsius > 80
+                || (day != 0 && day != 1)) {
             throw new IOException("Invalid weather values");
         }
         if (conditionFor(code, day == 1) == null) {
@@ -328,7 +367,8 @@ public final class WeatherService {
     }
 
     private enum Unit {
-        CELSIUS("celsius", "°C", "°C"), FAHRENHEIT("fahrenheit", "°F", "°F");
+        CELSIUS("celsius", "°C", "°C"),
+        FAHRENHEIT("fahrenheit", "°F", "°F");
 
         final String apiName;
         final String providerSymbol;
@@ -347,34 +387,41 @@ public final class WeatherService {
             return switch (value.trim().toLowerCase(Locale.ROOT)) {
                 case "metric", "celsius" -> CELSIUS;
                 case "imperial", "fahrenheit" -> FAHRENHEIT;
-                default -> throw new IllegalArgumentException("Weather units must be metric/celsius or imperial/fahrenheit");
+                default ->
+                        throw new IllegalArgumentException(
+                                "Weather units must be metric/celsius or imperial/fahrenheit");
             };
         }
     }
 
-    private record Reading(double temperature, int code, boolean day, Instant observedAt, Instant fetchedAt) { }
-    private record State(Reading reading, boolean failed) { }
-    private record Condition(String description, String icon) { }
+    private record Reading(
+            double temperature, int code, boolean day, Instant observedAt, Instant fetchedAt) {}
+
+    private record State(Reading reading, boolean failed) {}
+
+    private record Condition(String description, String icon) {}
 
     @FunctionalInterface
     interface HttpTransport {
         Response send(HttpRequest request) throws Exception;
     }
 
-    record Response(int status, byte[] body) { }
+    record Response(int status, byte[] body) {}
 
     private static final class JdkHttpTransport implements HttpTransport {
-        private final HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
+        private final HttpClient client =
+                HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(5))
+                        .followRedirects(HttpClient.Redirect.NEVER)
+                        .build();
 
         @Override
         public Response send(HttpRequest request) throws Exception {
-            CompletableFuture<HttpResponse<byte[]>> future = client.sendAsync(request,
-                    ignored -> new LimitedBodySubscriber(MAX_BYTES));
+            CompletableFuture<HttpResponse<byte[]>> future =
+                    client.sendAsync(request, ignored -> new LimitedBodySubscriber(MAX_BYTES));
             try {
-                HttpResponse<byte[]> response = future.get(REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                HttpResponse<byte[]> response =
+                        future.get(REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
                 return new Response(response.statusCode(), response.body());
             } catch (TimeoutException | InterruptedException ex) {
                 future.cancel(true);
@@ -415,7 +462,8 @@ public final class WeatherService {
                 int length = buffer.remaining();
                 if (length > limit - output.size()) {
                     subscription.cancel();
-                    result.completeExceptionally(new IOException("Weather response exceeds size limit"));
+                    result.completeExceptionally(
+                            new IOException("Weather response exceeds size limit"));
                     return;
                 }
                 byte[] chunk = new byte[length];
