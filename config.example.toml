@@ -1,0 +1,38 @@
+# Copy to config.toml and edit as needed. Missing settings use the defaults below.
+# Relative paths are resolved against the directory containing this file.
+cache_directory = "cache"
+
+[transit]
+url = "https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip"
+update_interval_minutes = 1440
+stop_name = "Łagiewniki"
+# Empty means resolve the exact stop name and associated platforms. Explicit IDs
+# can be discovered from the feed; none are assumed without inspecting it.
+stop_ids = []
+# Empty means all lines. Entries are GTFS route short names.
+lines = []
+
+# Both filter tables are optional, indexed by line/route short name. Empty
+# arrays or absent entries mean no filter for that line. Direction IDs have
+# meaning only within their line; 0 and 1 are not geographic directions.
+[transit.headsigns]
+# "8" = ["Borek Fałęcki"]
+
+[transit.direction_ids]
+# "8" = [0]
+
+[weather]
+latitude = 50.0647
+longitude = 19.9450
+location = "Kraków"
+# Open-Meteo temperature units: "celsius" or "fahrenheit".
+units = "celsius"
+refresh_interval_minutes = 15
+
+[display]
+time_zone = "Europe/Warsaw"
+# Java DateTimeFormatter pattern.
+time_format = "HH:mm"
+full_screen = true
+text_scale = 1.0
+departure_limit = 6
