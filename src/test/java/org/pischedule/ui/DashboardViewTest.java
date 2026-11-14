@@ -62,9 +62,9 @@ class DashboardViewTest {
     void boardingPointAppearsAfterDestinationAndShortensKrakowStopCode() {
         assertEquals("(Łagiewniki 01)", DashboardView.boardingLabel("Łagiewniki", "553-01"));
         assertEquals("(Łagiewniki 02)", DashboardView.boardingLabel("Łagiewniki", "553-02"));
-        assertEquals("(Station B-CODE)", DashboardView.boardingLabel("Station", "B-CODE"));
-        assertEquals("(Station 1)", DashboardView.boardingLabel("Station", "1"));
-        assertEquals("(Station)", DashboardView.boardingLabel("Station", ""));
+        assertEquals("(B-CODE)", DashboardView.boardingLabel("Station", "B-CODE"));
+        assertEquals("(1)", DashboardView.boardingLabel("Station", "1"));
+        assertEquals("", DashboardView.boardingLabel("Station", ""));
         assertEquals("", DashboardView.boardingLabel("", ""));
 
         BufferedImage image = new BufferedImage(400, 100, BufferedImage.TYPE_INT_ARGB);
@@ -226,8 +226,10 @@ class DashboardViewTest {
         Departure second = new Departure("8", "Centre", "Stop", "553-01", now.plusSeconds(600), 0);
         Departure third = new Departure("8", "Centre", "Stop", "553-01", now.plusSeconds(1200), 0);
         assertEquals("<1 min   10 min   20 min", DashboardView.departureTimes(List.of(first, second, third), now));
-        Departure changed = new Departure("8", "Branch", "Stop", "553-02", now.plusSeconds(900), 0);
-        assertEquals("<1 min   15 min Branch (Stop 02)", DashboardView.departureTimes(List.of(first, changed), now));
+        Departure changed = new Departure("8", "Centre", "Stop", "553-02", now.plusSeconds(900), 0);
+        assertEquals("<1 min   15 min (Stop 02)", DashboardView.departureTimes(List.of(first, changed), now));
+        Departure branch = new Departure("8", "Branch", "Stop", "553-02", now.plusSeconds(900), 0);
+        assertEquals("<1 min", DashboardView.departureTimes(List.of(first, branch), now));
         assertEquals("<1 min", DashboardView.departureTimes(List.of(first), now));
         assertEquals("", DashboardView.departureTimes(List.of(), now));
     }
@@ -253,7 +255,7 @@ class DashboardViewTest {
     }
 
     private static boolean containsAccent(BufferedImage image, int left, int top, int right, int bottom) {
-        int accent = new java.awt.Color(146, 227, 139).getRGB();
+        int accent = new java.awt.Color(93, 201, 197).getRGB();
         for (int y = top; y < bottom; y++) {
             for (int x = left; x < right; x++) {
                 if (image.getRGB(x, y) == accent) return true;

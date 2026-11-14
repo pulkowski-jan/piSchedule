@@ -59,7 +59,7 @@ class WeatherServiceTest {
         service.update();
         WeatherSnapshot result = service.snapshot(NOW);
         assertEquals("13°C", result.temperature());
-        assertEquals("Partly cloudy", result.condition());
+        assertEquals("", result.condition());
         assertFalse(result.icon().isBlank());
         assertEquals("", result.status());
         assertTrue(sent.get().uri().toString().startsWith("https://api.open-meteo.com/v1/forecast?"));
@@ -125,7 +125,7 @@ class WeatherServiceTest {
         WeatherService restarted = new WeatherService(config("celsius"), directory,
                 request -> { throw new IOException("offline"); }, CLOCK);
         assertEquals("-3°C", restarted.snapshot(NOW).temperature());
-        assertEquals("Slight snowfall", restarted.snapshot(NOW).condition());
+        assertEquals("Słaby śnieg", restarted.snapshot(NOW).condition());
         assertEquals("Weather stale", restarted.snapshot(NOW).status());
         assertThrows(IOException.class, restarted::update);
         assertEquals("-3°C", restarted.snapshot(NOW).temperature());
@@ -219,12 +219,12 @@ class WeatherServiceTest {
     void mapsEveryOpenMeteoWmoCode() throws Exception {
         int[] codes = {0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57, 61, 63, 65, 66, 67,
                 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99};
-        String[] descriptions = {"Clear sky", "Mainly clear", "Partly cloudy", "Overcast", "Fog", "Depositing rime fog",
-                "Light drizzle", "Moderate drizzle", "Dense drizzle", "Light freezing drizzle", "Dense freezing drizzle",
-                "Slight rain", "Moderate rain", "Heavy rain", "Light freezing rain", "Heavy freezing rain",
-                "Slight snowfall", "Moderate snowfall", "Heavy snowfall", "Snow grains", "Slight rain showers",
-                "Moderate rain showers", "Violent rain showers", "Slight snow showers", "Heavy snow showers",
-                "Thunderstorm", "Thunderstorm with slight hail", "Thunderstorm with heavy hail"};
+        String[] descriptions = {"", "", "", "", "Mgła", "Mgła",
+                "Mżawka", "Mżawka", "Mżawka", "Mżawka", "Mżawka",
+                "Słaby deszcz", "Deszcz", "Silny deszcz", "Marznący deszcz", "Marznący deszcz",
+                "Słaby śnieg", "Śnieg", "Silny śnieg", "Śnieg", "Przelotny deszcz",
+                "Przelotny deszcz", "Przelotny deszcz", "Przelotny śnieg", "Przelotny śnieg",
+                "Burza", "Burza z gradem", "Burza z gradem"};
         assertEquals(codes.length, descriptions.length);
         AtomicInteger code = new AtomicInteger();
         WeatherService service = new WeatherService(config("metric"), directory,

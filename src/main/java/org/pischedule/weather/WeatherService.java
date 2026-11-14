@@ -323,7 +323,7 @@ public final class WeatherService {
             case 85, 86 -> new Condition("Przelotny śnieg", "❄");
             case 95 -> new Condition("Burza", "⚡");
             case 96, 99 -> new Condition("Burza z gradem", "⚡");
-            default -> new Condition("", "");
+            default -> null;
         };
     }
 

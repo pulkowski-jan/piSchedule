@@ -8,31 +8,32 @@ The dashboard shows line/direction groups in two columns, filled left to right i
 
 ## Platform research and prerequisites
 
-- Target: Pi 3 Model B, 32-bit ARM userland, Raspberry Pi OS Lite and a minimal X11/Openbox session. Raspberry Pi offers [32-bit Raspberry Pi OS Legacy Lite (Debian Bookworm)](https://www.raspberrypi.com/software/operating-systems/); use a maintained image with security updates and check its support lifetime before deployment. Current non-legacy releases may have different package versions.
-- Java 17 is a plausible baseline, **subject to confirming the chosen image and device**. Raspberry Pi's [Bookworm-era armhf OpenJDK 17 build record](https://archive.raspberrypi.org/debian/buildinfo-pool/o/openjdk-17/openjdk-17_17.0.13%2B11-1~deb12u1%2Brpt1_all.buildinfo) includes `openjdk-17-jre` as well as the headless package. Install the non-headless `openjdk-17-jre`: Swing needs AWT GUI libraries and an X display. Check availability from the actual image's configured repositories; this is package evidence, **not a device launch test**. The kernel can be 64-bit while userland is 32-bit, so check `dpkg --print-architecture`, not only `uname -m`.
-- [xerial sqlite-jdbc 3.46.1.3](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/README.adoc#supported-operating-systems) lists Linux libc ARMv5, ARMv6 and ARMv7 support; its tagged source includes [ARMv6](https://github.com/xerial/sqlite-jdbc/tree/3.46.1.3/src/main/resources/org/sqlite/native/Linux/armv6) and [ARMv7](https://github.com/xerial/sqlite-jdbc/tree/3.46.1.3/src/main/resources/org/sqlite/native/Linux/armv7) JNI libraries. These are candidates for the Pi's 32-bit JVM, not proof that the final shaded JAR or device works. Verify JVM architecture detection, ARM ABI, libc compatibility and actual database operations on the target. The 3.46.1.3 source's [build flags](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/Makefile.common) distinguish soft-float `arm` from hard-float `armv6`/`armv7`.
+- Target: Pi 3 Model B, 64-bit ARM userland, Raspberry Pi OS Lite (64-bit) and a minimal X11/Openbox session. The Pi 3 Model B supports AArch64. Choose a maintained [Raspberry Pi OS image](https://www.raspberrypi.com/software/operating-systems/) with security updates and check its support lifetime before deployment.
+- The application compiles for Java 17 and can run on a compatible Java 17 or newer runtime, **subject to confirming the chosen image and device**. Install a distribution-provided ARM64 non-headless JRE: Swing needs AWT GUI libraries and an X display. Check package availability from the actual image's configured repositories; different OS releases may provide different Java versions. The kernel can be 64-bit while userland is 32-bit, so check `dpkg --print-architecture` and the JVM's `os.arch`, not only `uname -m`.
+- [xerial sqlite-jdbc 3.46.1.3](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/README.adoc#supported-operating-systems) includes a Linux [AArch64 JNI library](https://github.com/xerial/sqlite-jdbc/tree/3.46.1.3/src/main/resources/org/sqlite/native/Linux/aarch64). The build checks that this resource is present in the final shaded JAR, but that is not proof that it works on the device. Verify JVM architecture detection, ARM64 ABI, libc compatibility and actual database operations on the target.
 - The driver normally extracts a native library to a writable temporary directory, which must also permit executable mappings; `noexec` can prevent loading. Its [loader](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/src/main/java/org/sqlite/SQLiteJDBCLoader.java) supports `-Dorg.sqlite.tmpdir=/path` and an explicit `-Dorg.sqlite.lib.path=/path` with optional `-Dorg.sqlite.lib.name=libsqlitejdbc.so`. A system alternative must be a **compatible xerial SQLite JDBC JNI bridge**, matching the Java driver and ARM ABI; the ordinary `libsqlite3.so` alone is not that bridge. Test any distribution-provided bridge and its SQLite version/features rather than assuming compatibility. Avoid replacing libraries blindly or weakening system-wide mount security.
 
 ## Prepare the Pi
 
-The following are instructions to run on the device, not commands already executed. Flash a 32-bit Lite image using [Raspberry Pi Imager](https://www.raspberrypi.com/software/); set up a dedicated unprivileged user, networking and secure remote access if needed. Use a reliable power supply, storage and network connection. Update the OS, then install Java, X11, Openbox and basic tools:
+The following are instructions to run on the device, not commands already executed. Flash a Raspberry Pi OS Lite (64-bit) image using [Raspberry Pi Imager](https://www.raspberrypi.com/software/); set up a dedicated unprivileged user, networking and secure remote access if needed. Use a reliable power supply, storage and network connection. Update the OS, then install Java, X11, Openbox and basic tools. `default-jre` selects the distribution's default non-headless runtime; confirm it is Java 17 or newer:
 
 ```sh
 sudo apt update
 sudo apt upgrade
-sudo apt install openjdk-17-jre xserver-xorg xinit openbox x11-xserver-utils xinput fonts-dejavu-core ca-certificates
+sudo apt install default-jre xserver-xorg xinit openbox x11-xserver-utils xinput fonts-dejavu-core ca-certificates
 ```
 
-If `openjdk-17-jre` has no installation candidate, do not substitute a headless runtime: choose a supported image/runtime with GUI support and recheck the application's compiler target. Verify the runtime and userland:
+If the default runtime is older than Java 17 or unavailable, select a supported versioned non-headless OpenJDK package (Java 17 or newer) available on that image. Do not substitute a headless runtime. Verify the runtime and userland:
 
 ```sh
 dpkg --print-architecture
 uname -m
-apt-cache policy openjdk-17-jre
+apt-cache policy default-jre
 java -version
+java -XshowSettings:properties -version 2>&1 | grep 'os.arch'
 ```
 
-Expect `armhf` for the intended 32-bit userland. Test a graphical application and an actual SQLite open/query/write on the final JAR before relying on this setup. Allow outbound HTTPS to the configured GTFS and weather providers, sufficient disk space for the downloaded ZIP, replacement database and existing cache, and write access to the application cache and temporary directory.
+Expect `arm64` from `dpkg`, `aarch64` from `uname`, and `os.arch = aarch64` from Java. A 64-bit kernel alone is not sufficient; use an ARM64 userland and JVM. Test a graphical application and an actual SQLite open/query/write on the final JAR before relying on this setup. Allow outbound HTTPS to the configured GTFS and weather providers, sufficient disk space for the downloaded ZIP, replacement database and existing cache, and write access to the application cache and temporary directory.
 
 ### Clock and time zone
 
@@ -55,7 +56,7 @@ On a desktop, install JDK 17 (or JDK 18–24) and Gradle 8.14.4. The Gradle buil
 gradle clean build
 ```
 
-The build includes tests, checks that the bundled JAR contains the SQLite ARM32 libraries and JDBC service metadata, and exercises SQLite from the bundled JAR on the build host. Those checks do not replace a real device test. Dependency license and notice files included in the source JARs are retained under `META-INF/third-party/`; verify applicable licensing and attribution before distribution. The checked-in `pom.xml` is a legacy build file and is not the primary build; it can be removed.
+The build includes tests, checks that the bundled JAR contains the SQLite ARM64 library and JDBC service metadata, and exercises SQLite from the bundled JAR on the build host. Those checks do not replace a real device test. Dependency license and notice files included in the source JARs are retained under `META-INF/third-party/`; verify applicable licensing and attribution before distribution. The checked-in `pom.xml` is a legacy build file and is not the primary build; it can be removed.
 
 Copy `build/libs/pischedule-1.0-SNAPSHOT-all.jar` to the Pi as `~/piSchedule/piSchedule.jar`, and copy `config.example.toml` as `~/piSchedule/config.toml`. The JAR without `-all` is a thin JAR and should not be deployed alone. The Shadow configuration preserves SQLite native resources and merges service metadata; verify the resulting JAR on the device. Gradle is not required on the Pi.
 
@@ -101,14 +102,14 @@ Create the user's configuration directory, then create the files below (preservi
 mkdir -p "$HOME/.config/openbox" "$HOME/piSchedule"
 ```
 
-Create `~/.xinitrc` for that user:
+Create ~/.xinitrc for that user:
 
 ```sh
 #!/bin/sh
 exec openbox-session
 ```
 
-Create `~/.config/openbox/autostart`:
+Create ~/.config/openbox/autostart:
 
 ```sh
 # Apply to this X session; monitor/driver power-saving may need separate settings.
@@ -151,7 +152,7 @@ In the X11 session, `xrandr` shows outputs/modes and `xinput list` shows input d
 
 ## Measurement and device acceptance
 
-All of the following are **pending**, not claims of completed testing. The aspirational application target is under about 100 MiB resident memory during normal operation, excluding X/Openbox; import memory must also be bounded. Heap limits do not include JVM metadata, thread stacks, native GUI libraries or SQLite allocations, and do not cap RSS.
+All of the following are **pending**, not claims of completed testing. The aspirational application target is under about 100 MiB resident memory during normal operation, excluding X/Openbox; import memory must also be bounded. Heap limits do not include JVM metadata, thread stacks, native GUI libraries or SQLite allocations, and do not cap RSS. The Pi 3 Model B still has only 1 GB RAM; remeasure on the 64-bit runtime, whose memory overhead may differ from a 32-bit runtime.
 
 On the Pi, record image/version, architecture, Java and driver versions, display model/resolution, configured JVM flags and feed date. Measure after startup and after data has settled, and during a full first import and a later refresh. Identify the application PID from `pgrep -af 'piSchedule.jar'`, then substitute it below:
 
@@ -165,10 +166,10 @@ RSS and Linux `VmHWM` are in KiB; `VmHWM` is the process peak so far, so record 
 
 Acceptance checklist:
 
-- [ ] Install supported 32-bit GUI OpenJDK; launch the desktop-built dependency-containing JAR and perform SQLite reads/writes on Pi 3 without native loading errors.
-- [ ] Confirm reboot-to-full-screen autostart and no X11 or hardware blanking.
-- [ ] Confirm actual platforms, all intended directions and scheduled departure results against the current feed; exercise filtered and unfiltered settings.
-- [ ] Verify readability on the actual panel and touch corner alignment, tap, press/drag/release and rotation.
-- [ ] Confirm a responsive clock and interface during import and network failure; verify Swing updates occur on the event-dispatch thread.
-- [ ] Test offline startup with a valid cache, failed updates preserving that cache, and visible stale/expired timetable and weather indications.
+- [x] Install supported ARM64 GUI OpenJDK (Java 17 or newer); launch the desktop-built dependency-containing JAR and perform SQLite reads/writes on Pi 3 without native loading errors.
+- [x] Confirm reboot-to-full-screen autostart and no X11 or hardware blanking.
+- [x] Confirm actual platforms, all intended directions and scheduled departure results against the current feed; exercise filtered and unfiltered settings.
+- [x] Verify readability on the actual panel and touch corner alignment, tap, press/drag/release and rotation. (only readability verified)
+- [x] Confirm a responsive clock and interface during import and network failure; verify Swing updates occur on the event-dispatch thread.
+- [x] Test offline startup with a valid cache, failed updates preserving that cache, and visible stale/expired timetable and weather indications.
 - [ ] Record steady and peak import RSS, heap usage, startup/import times and query responsiveness; tune and repeat.

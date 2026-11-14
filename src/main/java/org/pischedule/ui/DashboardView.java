@@ -430,9 +430,10 @@ public final class DashboardView extends JPanel {
     static String fitDestination(FontMetrics metrics, String destination, String stopName, String platform, int width) {
         if (width <= 0) return "";
         String direction = bounded(destination).strip();
-        String name = bounded(stopName).strip();
+        String name = KRAKOW_STOP_CODE_PATTERN.matcher(bounded(platform).strip()).matches()
+                ? bounded(stopName).strip() : "";
         String point = shortPlatform(platform);
-        String label = boardingLabel(name, point);
+        String label = boardingLabel(stopName, platform);
         String full = join(direction, label);
         if (metrics.stringWidth(full) <= width) return full;
         if (label.isEmpty()) return fit(metrics, direction, width);
@@ -462,7 +463,8 @@ public final class DashboardView extends JPanel {
     }
 
     private static String fitBoardingLabel(FontMetrics metrics, String name, String point, int width) {
-        String label = boardingLabel(name, point);
+        String contents = join(name, point);
+        String label = contents.isEmpty() ? "" : "(" + contents + ")";
         if (metrics.stringWidth(label) <= width) return label;
         if (name.isEmpty()) return fit(metrics, label, width);
         String suffix = point.isEmpty() ? ")" : " " + point + ")";
