@@ -1,0 +1,7 @@
+# Local build output and machine-specific configuration/cache
+/.gradle/
+/build/
+/target/
+/config.toml
+/cache/
+/.idea/
