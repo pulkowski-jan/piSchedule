@@ -21,8 +21,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** External settings. Relative cache paths are resolved against the configuration file. */
-public record AppConfig(Transit transit, Weather weather, Display display, Path cacheDirectory) {
+/** External settings. Relative paths are resolved against the configuration file's directory. */
+public record AppConfig(
+        Transit transit, Weather weather, Display display, Path cacheDirectory, Path logFile) {
+    public AppConfig(Transit transit, Weather weather, Display display, Path cacheDirectory) {
+        this(transit, weather, display, cacheDirectory, null);
+    }
+
     public record Transit(
             String url,
             Duration updateInterval,
@@ -30,8 +35,35 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
             List<String> stopIds,
             List<String> lines,
             Map<String, List<String>> headsigns,
-            Map<String, List<Integer>> directionIds) {
+            Map<String, List<Integer>> directionIds,
+            Duration lookAhead) {
+        public Transit(
+                String url,
+                Duration updateInterval,
+                String stopName,
+                List<String> stopIds,
+                List<String> lines,
+                Map<String, List<String>> headsigns,
+                Map<String, List<Integer>> directionIds) {
+            this(
+                    url,
+                    updateInterval,
+                    stopName,
+                    stopIds,
+                    lines,
+                    headsigns,
+                    directionIds,
+                    Duration.ofMinutes(120));
+        }
+
         public Transit {
+            if (lookAhead == null
+                    || lookAhead.isNegative()
+                    || lookAhead.isZero()
+                    || lookAhead.compareTo(Duration.ofDays(7)) > 0) {
+                throw new IllegalArgumentException(
+                        "lookAhead must be greater than zero and at most 7 days");
+            }
             stopIds = List.copyOf(stopIds);
             lines = List.copyOf(lines);
             headsigns = immutableLists(headsigns);
@@ -73,7 +105,7 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
     }
 
     private static AppConfig parse(TomlTable root, Path path) throws ConfigException {
-        checkKeys(root, "", Set.of("cache_directory", "transit", "weather", "display"));
+        checkKeys(root, "", Set.of("cache_directory", "log_file", "transit", "weather", "display"));
         TomlTable transit = table(root, "transit", "transit");
         TomlTable weather = table(root, "weather", "weather");
         TomlTable display = table(root, "display", "display");
@@ -83,6 +115,7 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
                 Set.of(
                         "url",
                         "update_interval_minutes",
+                        "look_ahead_minutes",
                         "stop_name",
                         "stop_ids",
                         "lines",
@@ -112,6 +145,11 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
             throw new ConfigException(
                     "transit.url must be an absolute HTTP(S) URL: " + e.getMessage());
         }
+        long lookAheadMinutes =
+                integer(transit, "look_ahead_minutes", "transit.look_ahead_minutes", 120);
+        if (lookAheadMinutes < 1 || lookAheadMinutes > 10080) {
+            throw new ConfigException("transit.look_ahead_minutes must be between 1 and 10080");
+        }
         Transit transitConfig =
                 new Transit(
                         url,
@@ -124,7 +162,8 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
                         strings(value(transit, "stop_ids"), "transit.stop_ids"),
                         strings(value(transit, "lines"), "transit.lines"),
                         stringFilters(table(transit, "headsigns", "transit.headsigns")),
-                        directionFilters(table(transit, "direction_ids", "transit.direction_ids")));
+                        directionFilters(table(transit, "direction_ids", "transit.direction_ids")),
+                        Duration.ofMinutes(lookAheadMinutes));
 
         double latitude = number(weather, "latitude", "weather.latitude", 50.0647);
         double longitude = number(weather, "longitude", "weather.longitude", 19.9450);
@@ -191,7 +230,19 @@ public record AppConfig(Transit transit, Weather weather, Display display, Path 
         } catch (InvalidPathException e) {
             throw new ConfigException("cache_directory is not a valid path: " + e.getMessage());
         }
-        return new AppConfig(transitConfig, weatherConfig, displayConfig, cachePath);
+        String log = string(root, "log_file", "log_file", null);
+        Path logPath = null;
+        if (log != null) {
+            try {
+                logPath = Path.of(log);
+                if (!logPath.isAbsolute())
+                    logPath = path.toAbsolutePath().getParent().resolve(logPath);
+                logPath = logPath.normalize();
+            } catch (InvalidPathException e) {
+                throw new ConfigException("log_file is not a valid path: " + e.getMessage());
+            }
+        }
+        return new AppConfig(transitConfig, weatherConfig, displayConfig, cachePath, logPath);
     }
 
     private static void checkKeys(TomlTable table, String prefix, Set<String> allowed)

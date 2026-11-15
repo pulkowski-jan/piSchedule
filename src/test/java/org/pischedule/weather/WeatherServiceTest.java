@@ -287,6 +287,22 @@ class WeatherServiceTest {
     }
 
     @Test
+    void unknownWeatherCodePreservesTheLastValidReadingAndCache() throws Exception {
+        AtomicReference<byte[]> body = new AtomicReference<>(response(7, 0, 1, NOW, "°C"));
+        WeatherService service =
+                new WeatherService(config("metric"), directory, request -> ok(body.get()), CLOCK);
+        service.update();
+        byte[] cached = Files.readAllBytes(directory.resolve("weather.json"));
+
+        body.set(response(10, 999, 1, NOW, "°C"));
+        IOException exception = assertThrows(IOException.class, service::update);
+        assertTrue(exception.getMessage().contains("999"));
+        assertEquals("7°C", service.snapshot(NOW).temperature());
+        assertEquals("Weather stale", service.snapshot(NOW).status());
+        assertArrayEquals(cached, Files.readAllBytes(directory.resolve("weather.json")));
+    }
+
+    @Test
     void streamingSubscriberCancelsAsSoonAsBodyExceedsLimit() {
         WeatherService.LimitedBodySubscriber subscriber =
                 new WeatherService.LimitedBodySubscriber(4);

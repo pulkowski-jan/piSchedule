@@ -10,8 +10,11 @@
  * with a stale status (or unavailable if no matching cache exists). Expired and stale can both be
  * reported. The last successful HTTP check is persisted; the failure flag is process-local.
  *
- * <p>Limits: snapshots accept 0..200 results and look at service dates through 31 days after the
- * requested date; GTFS times through 167:59:59 are supported. Downloads are limited to 256 MiB,
+ * <p>Limits: raw snapshots accept 0..200 results; grouped snapshots accept 0..200 groups with
+ * up to ten buffered departures per group. SQL bounds restrict departures to the one-minute
+ * grace period through the configured look-ahead window (120 minutes by default, at most seven
+ * days), while service-date scanning accounts for overnight and DST transitions. GTFS times
+ * through 167:59:59 are supported. Downloads are limited to 256 MiB,
  * used ZIP entries to 512 MiB each and 1.5 GiB total, and CSV records to 64 Ki characters. Stop
  * searches return at most 10,000 results and 2 Mi characters (otherwise they fail). Updates use two HTTP attempts,
  * connect/read timeouts and a bounded streaming download. Temporary import and vacuum files require

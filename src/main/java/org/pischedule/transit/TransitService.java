@@ -11,19 +11,14 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.*;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.*;
 import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Disk-backed scheduled GTFS service. Network and import work must be run off the UI thread.
@@ -31,13 +26,14 @@ import java.util.*;
 public final class TransitService {
     private static final long MAX_DOWNLOAD = 256L * 1024 * 1024;
     public static final int MAX_RESULTS = 200;
-    private static final int SEARCH_DAYS = 3;
     private static final int PER_DIRECTION = 10;
+    private static final Logger LOGGER = Logger.getLogger(TransitService.class.getName());
     private final Path directory;
     private final Path database;
     private final Path archive;
     private final String url;
     private final Duration interval;
+    private final Duration lookAhead;
     private final String stopName;
     private final List<String> stopIds;
     private final List<String> lines;
@@ -48,6 +44,19 @@ public final class TransitService {
     private final Object updateLock = new Object();
     private volatile boolean updating;
     private volatile boolean failed;
+    private static final String GET_DEPARTURES_QUERY_TEMPLATE =
+            "SELECT d.seconds, r.line, COALESCE(NULLIF(d.headsign,''),t.headsign), s.platform,"
+                    + " t.direction, s.name "
+                    + "FROM departures d "
+                    + "JOIN trips t ON t.id=d.trip_id "
+                    + "JOIN routes r ON r.id=t.route_id "
+                    + "JOIN stops s ON s.id=d.stop_id "
+                    + "LEFT JOIN calendars c ON c.service_id=t.service_id "
+                    + "LEFT JOIN exceptions e ON e.service_id=t.service_id AND e.date=? "
+                    + "WHERE COALESCE(e.type, CASE WHEN c.start_date <= ? AND c.end_date >= ? "
+                    + "AND substr(c.weekdays, ?, 1)='1' THEN 1 ELSE 2 END)=1 "
+                    + "AND d.seconds >= ? AND d.seconds <= ? "
+                    + "ORDER BY d.seconds";
 
     public TransitService(AppConfig.Transit config, Path cacheDirectory) {
         Objects.requireNonNull(config, "config");
@@ -59,8 +68,15 @@ public final class TransitService {
             throw new IllegalArgumentException("GTFS URL must use HTTP or HTTPS");
         }
         interval = Objects.requireNonNull(config.updateInterval(), "updateInterval");
-        if (interval.isNegative() || interval.isZero())
+        if (interval.isNegative() || interval.isZero()) {
             throw new IllegalArgumentException("updateInterval must be positive");
+        }
+        lookAhead = Objects.requireNonNull(config.lookAhead(), "lookAhead");
+        if (lookAhead.isNegative()
+                || lookAhead.isZero()
+                || lookAhead.compareTo(Duration.ofDays(7)) > 0) {
+            throw new IllegalArgumentException("lookAhead must be positive and at most seven days");
+        }
         stopName = Objects.requireNonNull(config.stopName(), "stopName");
         stopIds = List.copyOf(config.stopIds());
         lines = List.copyOf(config.lines());
@@ -104,7 +120,9 @@ public final class TransitService {
             StringBuilder builder, List<T> values) {
         TreeSet<T> sorted = new TreeSet<>(values);
         append(builder, Integer.toString(sorted.size()));
-        for (T value : sorted) append(builder, value.toString());
+        for (T value : sorted) {
+            append(builder, value.toString());
+        }
     }
 
     private static <T extends Comparable<? super T>> void appendMap(
@@ -137,7 +155,9 @@ public final class TransitService {
                     synchronized (databaseLock) {
                         try {
                             previous = metadata();
-                            if (previous != null && !usableCache(database)) previous = null;
+                            if (previous != null && !usableCache(database)) {
+                                previous = null;
+                            }
                         } catch (Exception invalidCache) {
                             previous = null;
                         }
@@ -149,9 +169,11 @@ public final class TransitService {
                                     previous == null ? null : previous.etag,
                                     previous == null ? null : previous.modified);
                     if (result.notModified) {
-                        if (previous == null || (blank(previous.etag) && blank(previous.modified)))
+                        if (previous == null
+                                || (blank(previous.etag) && blank(previous.modified))) {
                             throw new IOException(
                                     "HTTP 304 without a validated conditional request");
+                        }
                         synchronized (databaseLock) {
                             try (Connection c = open(database);
                                     PreparedStatement p =
@@ -175,13 +197,15 @@ public final class TransitService {
                                 result.etag,
                                 result.modified);
                         Metadata next = metadata(replacement);
-                        if (next == null || !usableCache(replacement))
+                        if (next == null || !usableCache(replacement)) {
                             throw new IOException("Replacement timetable failed validation");
+                        }
                         Instant now = Instant.now();
-                        if (previous != null && covers(previous, now) && !covers(next, now))
+                        if (previous != null && covers(previous, now) && !covers(next, now)) {
                             throw new IOException(
                                     "Replacement timetable does not cover today; retaining the"
                                             + " current cache");
+                        }
                         synchronized (databaseLock) {
                             atomicReplace(replacement, database);
                             replacement = null;
@@ -232,10 +256,10 @@ public final class TransitService {
                     if (Files.isRegularFile(archive)) {
                         try {
                             List<Stop> cached = GtfsImporter.searchStops(archive, query);
-                            System.err.println(
-                                    "Stop search: using a possibly stale cached feed ("
-                                            + e.getMessage()
-                                            + ")");
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "Stop search: using a possibly stale cached feed",
+                                    e);
                             return cached;
                         } catch (Exception invalidArchive) {
                             e.addSuppressed(invalidArchive);
@@ -266,19 +290,22 @@ public final class TransitService {
 
     private TransitSnapshot snapshot(Instant now, int limit, boolean groupLimit) {
         Objects.requireNonNull(now, "now");
-        if (limit < 0 || limit > MAX_RESULTS)
+        if (limit < 0 || limit > MAX_RESULTS) {
             throw new IllegalArgumentException("limit must be between 0 and " + MAX_RESULTS);
+        }
         synchronized (databaseLock) {
-            if (!Files.isRegularFile(database))
+            if (!Files.isRegularFile(database)) {
                 return new TransitSnapshot(
                         List.of(), stopName, failed && !updating ? "unavailable" : "loading");
+            }
             try (Connection c = open(database)) {
                 // One SQLite read transaction pins the same cache generation for metadata and rows.
                 c.setAutoCommit(false);
                 Metadata meta = metadata(c);
-                if (meta == null)
+                if (meta == null) {
                     return new TransitSnapshot(
                             List.of(), stopName, failed && !updating ? "unavailable" : "loading");
+                }
                 ZoneId zone = ZoneId.of(meta.zone);
                 LocalDate today = now.atZone(zone).toLocalDate();
                 boolean expired = today.isBefore(meta.firstDate) || today.isAfter(meta.lastDate);
@@ -286,24 +313,17 @@ public final class TransitService {
                 String status =
                         expired ? (stale ? "expired; stale" : "expired") : (stale ? "stale" : "");
                 List<Departure> departures =
-                        limit == 0
-                                ? List.of()
-                                : query(c, now, limit, groupLimit, zone, today, meta);
+                        limit == 0 ? List.of() : query(c, now, limit, groupLimit, zone, meta);
                 return new TransitSnapshot(departures, meta.stopName, status);
             } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "Timetable query failed", e);
                 return new TransitSnapshot(List.of(), stopName, "unavailable");
             }
         }
     }
 
     private List<Departure> query(
-            Connection c,
-            Instant now,
-            int limit,
-            boolean groupLimit,
-            ZoneId zone,
-            LocalDate today,
-            Metadata meta)
+            Connection c, Instant now, int limit, boolean groupLimit, ZoneId zone, Metadata meta)
             throws Exception {
         Comparator<Departure> order =
                 Comparator.comparing(Departure::time)
@@ -320,39 +340,42 @@ public final class TransitService {
         // The head of each queue is the latest retained departure.
         Map<DirectionKey, PriorityQueue<Departure>> groups = new HashMap<>();
         Instant earliestVisible = now.minus(Departure.DISPLAY_GRACE);
-        // Feed validity dates describe the actual travel period, not necessarily
-        // the service date: 25:00 on the previous day may fall within coverage.
-        LocalDate start = today.minusDays(meta.maxSeconds / 86400L + 2);
-        LocalDate end =
-                today.plusDays(SEARCH_DAYS).isBefore(meta.lastDate)
-                        ? today.plusDays(SEARCH_DAYS)
-                        : meta.lastDate;
-        String sql =
-                "SELECT d.seconds, r.line, COALESCE(NULLIF(d.headsign,''),t.headsign), s.platform,"
-                    + " t.direction, s.name FROM departures d JOIN trips t ON t.id=d.trip_id JOIN"
-                    + " routes r ON r.id=t.route_id JOIN stops s ON s.id=d.stop_id LEFT JOIN"
-                    + " calendars c ON c.service_id=t.service_id LEFT JOIN exceptions e ON"
-                    + " e.service_id=t.service_id AND e.date=? WHERE COALESCE(e.type, CASE WHEN"
-                    + " c.start_date<=? AND c.end_date>=? AND substr(c.weekdays,?,1)='1' THEN 1"
-                    + " ELSE 2 END)=1 ORDER BY d.seconds";
-        try (PreparedStatement p = c.prepareStatement(sql)) {
+        Instant latestVisible = now.plus(lookAhead);
+        // Search service dates that could contribute to this actual travel-time window.
+        // GTFS times may exceed 24 hours, and the noon-based origin can cross a local
+        // date boundary on DST days. SQL bounds below discard non-overlapping dates.
+        LocalDate start =
+                earliestVisible.atZone(zone).toLocalDate().minusDays(meta.maxSeconds / 86400L + 2);
+        LocalDate end = latestVisible.atZone(zone).toLocalDate().plusDays(1);
+        if (end.isAfter(meta.lastDate.plusDays(1))) end = meta.lastDate.plusDays(1);
+        try (PreparedStatement p = c.prepareStatement(GET_DEPARTURES_QUERY_TEMPLATE)) {
             for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
                 // GTFS defines time as elapsed seconds from local noon minus 12 hours, including on
                 // DST days.
                 Instant origin = date.atTime(12, 0).atZone(zone).toInstant().minusSeconds(43200);
-                // A direction can first appear on a later service day, so scan the full search
-                // window.
+                Duration lowerOffset = Duration.between(origin, earliestVisible);
+                // GTFS seconds are integral: ceil the inclusive lower bound, floor the upper.
+                long firstSecond =
+                        Math.max(
+                                0, lowerOffset.getSeconds() + (lowerOffset.getNano() == 0 ? 0 : 1));
+                long lastSecond =
+                        Math.min(
+                                meta.maxSeconds,
+                                Duration.between(origin, latestVisible).getSeconds());
+                if (firstSecond > lastSecond) continue;
+
                 String day = GtfsImporter.formatDate(date);
                 p.setString(1, day);
                 p.setString(2, day);
                 p.setString(3, day);
                 p.setInt(4, date.getDayOfWeek().getValue());
+                p.setLong(5, firstSecond);
+                p.setLong(6, lastSecond);
                 try (ResultSet rs = p.executeQuery()) {
                     while (rs.next()) {
                         Instant time = origin.plusSeconds(rs.getInt(1));
                         LocalDate travelDate = time.atZone(zone).toLocalDate();
-                        if (time.isBefore(earliestVisible)
-                                || travelDate.isBefore(meta.firstDate)
+                        if (travelDate.isBefore(meta.firstDate)
                                 || travelDate.isAfter(meta.lastDate)) {
                             continue;
                         }
@@ -365,8 +388,9 @@ public final class TransitService {
                             continue;
                         }
                         String boardingStop = rs.getString(6);
-                        if (boardingStop == null || boardingStop.isBlank())
+                        if (boardingStop == null || boardingStop.isBlank()) {
                             boardingStop = meta.stopName;
+                        }
                         Departure departure =
                                 new Departure(
                                         line,
@@ -394,9 +418,7 @@ public final class TransitService {
             List<List<Departure>> earliestGroups =
                     groups.values().stream()
                             .map(queue -> queue.stream().sorted(order).toList())
-                            .sorted(
-                                    Comparator.comparing(
-                                            (List<Departure> group) -> group.get(0), order))
+                            .sorted(Comparator.comparing(List::getFirst, order))
                             .limit(limit)
                             .toList();
             earliestGroups.forEach(result::addAll);
@@ -404,7 +426,9 @@ public final class TransitService {
             groups.values().forEach(result::addAll);
         }
         result.sort(order);
-        if (!groupLimit && result.size() > limit) return List.copyOf(result.subList(0, limit));
+        if (!groupLimit && result.size() > limit) {
+            return List.copyOf(result.subList(0, limit));
+        }
         return List.copyOf(result);
     }
 
@@ -417,9 +441,13 @@ public final class TransitService {
             List<String> lines,
             Map<String, List<String>> headsigns,
             Map<String, List<Integer>> directions) {
-        if (!lines.isEmpty() && !lines.contains(line)) return false;
+        if (!lines.isEmpty() && !lines.contains(line)) {
+            return false;
+        }
         List<String> names = headsigns.get(line);
-        if (names != null && !names.isEmpty() && !names.contains(destination)) return false;
+        if (names != null && !names.isEmpty() && !names.contains(destination)) {
+            return false;
+        }
         List<Integer> ids = directions.get(line);
         return ids == null || ids.isEmpty() || direction != null && ids.contains(direction);
     }
@@ -446,7 +474,9 @@ public final class TransitService {
         try (Connection c = open(path);
                 Statement s = c.createStatement()) {
             try (ResultSet check = s.executeQuery("PRAGMA quick_check(1)")) {
-                if (!check.next() || !"ok".equalsIgnoreCase(check.getString(1))) return false;
+                if (!check.next() || !"ok".equalsIgnoreCase(check.getString(1))) {
+                    return false;
+                }
             }
             // Check all tables and columns used by the departure query, not just metadata.
             try (ResultSet ignored =
@@ -466,7 +496,9 @@ public final class TransitService {
     }
 
     private Metadata metadata(Path path) throws Exception {
-        if (!Files.isRegularFile(path)) return null;
+        if (!Files.isRegularFile(path)) {
+            return null;
+        }
         try (Connection c = open(path)) {
             return metadata(c);
         }
@@ -478,14 +510,17 @@ public final class TransitService {
                         s.executeQuery(
                                 "SELECT signature, timezone, first_date, last_date, max_seconds,"
                                         + " stop_name, checked_at, etag, modified FROM metadata")) {
-            if (!r.next() || !signature.equals(r.getString(1))) return null;
+            if (!r.next() || !signature.equals(r.getString(1))) {
+                return null;
+            }
             String zone = r.getString(2);
             ZoneId.of(zone);
             LocalDate first = GtfsImporter.parseDate(r.getString(3));
             LocalDate last = GtfsImporter.parseDate(r.getString(4));
             int maximum = r.getInt(5);
-            if (first.isAfter(last) || maximum < 0 || maximum > 604799 || r.getString(6) == null)
+            if (first.isAfter(last) || maximum < 0 || maximum > 604799 || r.getString(6) == null) {
                 throw new IOException("Invalid timetable metadata");
+            }
             return new Metadata(
                     zone,
                     first,
@@ -501,7 +536,9 @@ public final class TransitService {
     private static FileLock tryLock(FileChannel channel) throws IOException {
         try {
             FileLock lock = channel.tryLock();
-            if (lock == null) throw new IOException("Another timetable update is running");
+            if (lock == null) {
+                throw new IOException("Another timetable update is running");
+            }
             return lock;
         } catch (OverlappingFileLockException e) {
             throw new IOException("Another timetable update is running", e);
@@ -536,15 +573,22 @@ public final class TransitService {
                 connection.setReadTimeout(30000);
                 connection.setInstanceFollowRedirects(true);
                 connection.setRequestProperty("User-Agent", "piSchedule/1.0");
-                if (etag != null && !etag.isBlank())
+                if (etag != null && !etag.isBlank()) {
                     connection.setRequestProperty("If-None-Match", etag);
-                if (modified != null && !modified.isBlank())
+                }
+                if (modified != null && !modified.isBlank()) {
                     connection.setRequestProperty("If-Modified-Since", modified);
+                }
                 int code = connection.getResponseCode();
-                if (code == 304) return new Download(true, etag, modified);
-                if (code != 200) throw new IOException("GTFS HTTP status " + code);
-                if (connection.getContentLengthLong() > MAX_DOWNLOAD)
+                if (code == 304) {
+                    return new Download(true, etag, modified);
+                }
+                if (code != 200) {
+                    throw new IOException("GTFS HTTP status " + code);
+                }
+                if (connection.getContentLengthLong() > MAX_DOWNLOAD) {
                     throw new IOException("GTFS archive exceeds size limit");
+                }
                 try (InputStream in = connection.getInputStream();
                         OutputStream out = Files.newOutputStream(target)) {
                     byte[] buffer = new byte[32768];
@@ -552,11 +596,13 @@ public final class TransitService {
                     long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
                     int n;
                     while ((n = in.read(buffer)) != -1) {
-                        if (System.nanoTime() - deadline > 0)
+                        if (System.nanoTime() - deadline > 0) {
                             throw new IOException("GTFS download timed out");
+                        }
                         total += n;
-                        if (total > MAX_DOWNLOAD)
+                        if (total > MAX_DOWNLOAD) {
                             throw new IOException("GTFS archive exceeds size limit");
+                        }
                         out.write(buffer, 0, n);
                     }
                 }
@@ -567,7 +613,9 @@ public final class TransitService {
             } catch (IOException e) {
                 last = e;
             } finally {
-                if (connection != null) connection.disconnect();
+                if (connection != null) {
+                    connection.disconnect();
+                }
             }
         }
         throw last;

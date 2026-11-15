@@ -95,12 +95,171 @@ class TransitServiceTest {
             Map<String, List<Integer>> directions) {
         return new TransitService(
                 new AppConfig.Transit(
-                        url, Duration.ofDays(3650), "Łagiewniki", ids, lines, heads, directions),
+                        // Calendar/filter fixtures intentionally span days, not the default window.
+                        url,
+                        Duration.ofDays(3650),
+                        "Łagiewniki",
+                        ids,
+                        lines,
+                        heads,
+                        directions,
+                        Duration.ofDays(7)),
                 cache);
     }
 
     private TransitService service() {
         return service(List.of(), List.of(), Map.of(), Map.of());
+    }
+
+    private TransitService service(Duration lookAhead) {
+        return new TransitService(
+                new AppConfig.Transit(
+                        url,
+                        Duration.ofDays(3650),
+                        "Łagiewniki",
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        Map.of(),
+                        lookAhead),
+                cache);
+    }
+
+    @Test
+    void defaultWindowIncludesExactBoundsAndRoundsSubsecondBoundsInward() throws Exception {
+        Map<String, String> files = baseFeed();
+        files.remove("calendar.txt");
+        files.put("calendar_dates.txt", "service_id,date,exception_type\ns,20261109,1\n");
+        files.put(
+                "stop_times.txt",
+                "trip_id,departure_time,stop_id,stop_sequence,pickup_type\n"
+                        + "a,09:58:59,A,1,0\nb,09:59:00,B,1,0\n"
+                        + "c,12:00:00,B,1,0\nnight,12:00:01,B,1,0\n");
+        response.set(zip(files));
+        // Deliberately use the backward-compatible seven-argument constructor here.
+        AppConfig.Transit config =
+                new AppConfig.Transit(
+                        url,
+                        Duration.ofDays(3650),
+                        "Łagiewniki",
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        Map.of());
+        assertEquals(Duration.ofMinutes(120), config.lookAhead());
+        TransitService service = new TransitService(config, cache);
+        service.update();
+        Instant now = Instant.parse("2026-11-09T09:00:00Z"); // 10:00 Warsaw
+        Instant lower = now.minus(Departure.DISPLAY_GRACE);
+        Instant upper = now.plus(Duration.ofMinutes(120));
+        assertEquals(Instant.parse("2026-11-09T08:59:00Z"), lower);
+        for (int nanos : List.of(-1, 0, 1)) {
+            Instant query = now.plusNanos(nanos);
+            List<Instant> expected =
+                    nanos < 0
+                            ? List.of(lower)
+                            : nanos == 0 ? List.of(lower, upper) : List.of(upper);
+            assertEquals(
+                    expected,
+                    service.snapshot(query, 20).departures().stream().map(Departure::time).toList(),
+                    "raw snapshot at " + query);
+            assertEquals(
+                    expected,
+                    service.snapshotGroups(query, 20).departures().stream()
+                            .map(Departure::time)
+                            .toList(),
+                    "grouped snapshot at " + query);
+        }
+    }
+
+    @Test
+    void changingLookAheadUsesSameImportedCacheWithoutUpdate() throws Exception {
+        TransitService broad = service(Duration.ofMinutes(120));
+        broad.update();
+        Instant now = Instant.parse("2026-11-09T08:45:00Z"); // 09:45 Warsaw
+        List<Instant> all =
+                List.of(
+                        Instant.parse("2026-11-09T09:00:00Z"),
+                        Instant.parse("2026-11-09T09:05:00Z"),
+                        Instant.parse("2026-11-09T09:06:00Z"));
+        assertEquals(
+                all, broad.snapshot(now, 20).departures().stream().map(Departure::time).toList());
+
+        // No update/reimport: lookAhead is a query setting, not part of the cache signature.
+        TransitService narrow = service(Duration.ofMinutes(15));
+        assertEquals("", narrow.snapshot(now, 20).status());
+        assertEquals(
+                all.subList(0, 1),
+                narrow.snapshot(now, 20).departures().stream().map(Departure::time).toList());
+        assertEquals(
+                all.subList(0, 1),
+                narrow.snapshotGroups(now, 20).departures().stream().map(Departure::time).toList());
+        TransitService widenedAgain = service(Duration.ofMinutes(120));
+        assertEquals(
+                all,
+                widenedAgain.snapshot(now, 20).departures().stream().map(Departure::time).toList());
+        assertEquals(1, requests.get());
+    }
+
+    @Test
+    void sevenDayWindowFindsServiceBeyondOldThreeDayLimitAndClipsItsUpperEdge() throws Exception {
+        Map<String, String> files = baseFeed();
+        files.remove("calendar.txt");
+        files.put(
+                "calendar_dates.txt",
+                "service_id,date,exception_type\n"
+                        + "four,20261108,1\nfour,20261113,1\nseven,20261116,1\n");
+        files.put(
+                "trips.txt",
+                "route_id,service_id,trip_id,trip_headsign,direction_id\n"
+                        + "r8,four,a,Four days,0\nr8,seven,b,Seven days,1\n"
+                        + "r10,seven,c,Too late,0\n");
+        files.put(
+                "stop_times.txt",
+                "trip_id,departure_time,stop_id,stop_sequence,pickup_type\n"
+                        + "a,10:00:00,A,1,0\nb,10:00:00,B,1,0\nc,10:00:01,B,1,0\n");
+        response.set(zip(files));
+        TransitService service = service(Duration.ofDays(7));
+        service.update();
+        Instant now = Instant.parse("2026-11-09T09:00:00Z");
+        List<Instant> expected =
+                List.of(now.plus(Duration.ofDays(4)), now.plus(Duration.ofDays(7)));
+        assertEquals(
+                expected,
+                service.snapshot(now, 20).departures().stream().map(Departure::time).toList());
+        assertEquals(
+                expected,
+                service.snapshotGroups(now, 20).departures().stream()
+                        .map(Departure::time)
+                        .toList());
+        assertEquals(
+                expected.subList(0, 1),
+                service.snapshot(now.minusNanos(1), 20).departures().stream()
+                        .map(Departure::time)
+                        .toList());
+    }
+
+    @Test
+    void previousServiceDayGtfsTwentyFiveHourCallObeysBothWindowEdges() throws Exception {
+        TransitService service = service(Duration.ofMinutes(15));
+        service.update();
+        Instant departure = Instant.parse("2026-11-02T00:15:00Z"); // Sunday's 25:15
+        Instant firstVisible = departure.minus(Duration.ofMinutes(15)); // Monday 01:00 Warsaw
+        assertTrue(service.snapshot(firstVisible.minusNanos(1), 20).departures().isEmpty());
+        for (Instant now : List.of(firstVisible, departure.plus(Departure.DISPLAY_GRACE))) {
+            assertEquals(
+                    List.of(departure),
+                    service.snapshot(now, 20).departures().stream().map(Departure::time).toList());
+            assertEquals(
+                    List.of(departure),
+                    service.snapshotGroups(now, 20).departures().stream()
+                            .map(Departure::time)
+                            .toList());
+        }
+        assertTrue(
+                service.snapshot(departure.plus(Departure.DISPLAY_GRACE).plusNanos(1), 20)
+                        .departures()
+                        .isEmpty());
     }
 
     @Test
@@ -603,20 +762,52 @@ class TransitServiceTest {
         files.remove("calendar.txt");
         files.put(
                 "calendar_dates.txt",
-                "service_id,date,exception_type\ns,20260329,1\ns,20261025,1\n");
+                // Cover the preceding local date too; do not conflate DST with coverage edges.
+                "service_id,date,exception_type\n"
+                        + "s,20260328,1\ns,20260329,1\ns,20261024,1\ns,20261025,1\n");
         files.put(
                 "stop_times.txt",
                 "trip_id,departure_time,stop_id,stop_sequence,stop_headsign,pickup_type\n"
                         + "a,02:30:00,A,1,,0\n");
         response.set(zip(files));
-        TransitService service = service();
+        TransitService service = service(Duration.ofMinutes(15));
         service.update();
-        Departure spring =
-                service.snapshot(Instant.parse("2026-03-29T00:00:00Z"), 1).departures().get(0);
-        assertEquals(Instant.parse("2026-03-29T00:30:00Z"), spring.time());
-        Departure autumn =
-                service.snapshot(Instant.parse("2026-10-25T00:00:00Z"), 1).departures().get(0);
-        assertEquals(Instant.parse("2026-10-25T01:30:00Z"), autumn.time());
+        ZoneId zone = ZoneId.of("Europe/Warsaw");
+        for (Instant departure :
+                List.of(
+                        Instant.parse("2026-03-29T00:30:00Z"),
+                        Instant.parse("2026-10-25T01:30:00Z"))) {
+            // GTFS 02:30 is elapsed time from local noon minus twelve elapsed hours,
+            // not local midnight (and not LocalTime 02:30 on the spring gap day).
+            LocalDate serviceDate = departure.atZone(zone).toLocalDate();
+            Instant origin =
+                    serviceDate.atTime(12, 0).atZone(zone).toInstant().minus(Duration.ofHours(12));
+            assertEquals(departure, origin.plus(Duration.ofMinutes(150)));
+            Instant firstVisible = departure.minus(Duration.ofMinutes(15));
+            assertEquals(serviceDate, firstVisible.atZone(zone).toLocalDate());
+            assertTrue(
+                    service.snapshot(firstVisible.minusNanos(1), 20).departures().isEmpty(),
+                    "before upper boundary on " + serviceDate);
+            for (Instant now : List.of(firstVisible, departure.plus(Departure.DISPLAY_GRACE))) {
+                assertEquals(
+                        List.of(departure),
+                        service.snapshot(now, 20).departures().stream()
+                                .map(Departure::time)
+                                .toList(),
+                        "raw DST snapshot at " + now);
+                assertEquals(
+                        List.of(departure),
+                        service.snapshotGroups(now, 20).departures().stream()
+                                .map(Departure::time)
+                                .toList(),
+                        "grouped DST snapshot at " + now);
+            }
+            assertTrue(
+                    service.snapshot(departure.plus(Departure.DISPLAY_GRACE).plusNanos(1), 20)
+                            .departures()
+                            .isEmpty(),
+                    "after lower boundary on " + serviceDate);
+        }
     }
 
     @Test

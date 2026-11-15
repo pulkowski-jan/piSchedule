@@ -28,11 +28,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Flow;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -57,6 +53,9 @@ public final class WeatherService {
                                     .build())
                     .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                     .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final WeatherSnapshot WEATHER_UNAVAILABLE_SNAPSHOT =
+            new WeatherSnapshot("", "", "", "Weather unavailable");
+    private static final Condition UNKNOWN_CONDITION = new Condition("", "");
 
     private final AppConfig.Weather config;
     private final Path cacheDirectory;
@@ -77,25 +76,10 @@ public final class WeatherService {
         this.cacheDirectory = Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.clock = Objects.requireNonNull(clock, "clock");
-        if (!Double.isFinite(config.latitude())
-                || config.latitude() < -90
-                || config.latitude() > 90
-                || !Double.isFinite(config.longitude())
-                || config.longitude() < -180
-                || config.longitude() > 180) {
-            throw new IllegalArgumentException("Invalid weather coordinates");
-        }
         this.unit = Unit.parse(config.units());
         Duration interval = Objects.requireNonNull(config.refreshInterval(), "refreshInterval");
-        if (interval.isZero() || interval.isNegative()) {
-            throw new IllegalArgumentException("Weather refresh interval must be positive");
-        }
-        Duration twiceInterval;
-        try {
-            twiceInterval = interval.multipliedBy(2);
-        } catch (ArithmeticException ex) {
-            twiceInterval = Duration.ofSeconds(Long.MAX_VALUE);
-        }
+        validate(config, interval);
+        Duration twiceInterval = getTwiceOrMaxValue(interval);
         this.maxAge =
                 twiceInterval.compareTo(MINIMUM_MAX_AGE) < 0 ? MINIMUM_MAX_AGE : twiceInterval;
         // A cache has not yet been verified in this process, so expose it as stale
@@ -103,21 +87,24 @@ public final class WeatherService {
         this.state = new AtomicReference<>(new State(loadCache(), true));
     }
 
-    /** Returns immediately and never starts a network request. */
+    /**
+     * Returns immediately and never starts a network request.
+     */
     public WeatherSnapshot snapshot(Instant now) {
         Objects.requireNonNull(now, "now");
         State current = state.get();
         if (current.reading == null) {
-            return new WeatherSnapshot("", "", "", "Weather unavailable");
+            return WEATHER_UNAVAILABLE_SNAPSHOT;
         }
         Reading reading = current.reading;
+        Condition condition = conditionFor(reading.code, reading.day);
         boolean stale =
                 current.failed
                         || tooOld(reading.fetchedAt, now)
                         || tooOld(reading.observedAt, now)
                         || tooFarInFuture(reading.fetchedAt, now)
-                        || tooFarInFuture(reading.observedAt, now);
-        Condition condition = conditionFor(reading.code, reading.day);
+                        || tooFarInFuture(reading.observedAt, now)
+                        || UNKNOWN_CONDITION.equals(condition);
         return new WeatherSnapshot(
                 Math.round(reading.temperature) + unit.suffix,
                 condition.description,
@@ -131,33 +118,16 @@ public final class WeatherService {
      */
     public synchronized void update() throws Exception {
         try {
-            HttpRequest request =
-                    HttpRequest.newBuilder(requestUri())
-                            .timeout(REQUEST_TIMEOUT)
-                            .header("Accept", "application/json")
-                            .GET()
-                            .build();
+            HttpRequest request = buildWeatherRequest();
             Response response = transport.send(request);
-            if (response == null
-                    || response.status != 200
-                    || response.body == null
-                    || response.body.length > MAX_BYTES) {
-                throw new IOException("Invalid weather HTTP response");
-            }
+            validateWeatherResponse(response);
             Instant fetchedAt = clock.instant();
             Reading reading = parseProviderResponse(response.body, fetchedAt);
             Reading previous = state.get().reading;
             if (previous != null && reading.observedAt.isBefore(previous.observedAt)) {
                 throw new IOException("Weather response is older than the cached observation");
             }
-            try {
-                writeCache(reading);
-            } catch (IOException | RuntimeException ex) {
-                // The new reading is usable, but persistence failed. Do not silently
-                // present the whole refresh as healthy.
-                state.set(new State(reading, true));
-                throw ex;
-            }
+            updateCache(reading);
             state.set(new State(reading, false));
         } catch (Exception ex) {
             state.updateAndGet(previous -> new State(previous.reading, true));
@@ -166,6 +136,34 @@ public final class WeatherService {
             }
             throw ex;
         }
+    }
+
+    private void updateCache(Reading reading) throws IOException {
+        try {
+            writeCache(reading);
+        } catch (IOException | RuntimeException ex) {
+            // The new reading is usable, but persistence failed. Do not silently
+            // present the whole refresh as healthy.
+            state.set(new State(reading, true));
+            throw ex;
+        }
+    }
+
+    private static void validateWeatherResponse(Response response) throws IOException {
+        if (response == null
+                || response.status != 200
+                || response.body == null
+                || response.body.length > MAX_BYTES) {
+            throw new IOException("Invalid weather HTTP response");
+        }
+    }
+
+    private HttpRequest buildWeatherRequest() {
+        return HttpRequest.newBuilder(requestUri())
+                .timeout(REQUEST_TIMEOUT)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
     }
 
     private URI requestUri() {
@@ -183,12 +181,7 @@ public final class WeatherService {
         JsonNode root = parseJson(bytes);
         JsonNode current = requiredObject(root, "current");
         JsonNode units = requiredObject(root, "current_units");
-        if (!unit.providerSymbol.equals(requiredText(units, "temperature_2m"))) {
-            throw new IOException("Unexpected weather temperature unit");
-        }
-        if (!"unixtime".equals(requiredText(units, "time"))) {
-            throw new IOException("Unexpected weather time unit");
-        }
+        validateUnits(units);
         double temperature = requiredNumber(current, "temperature_2m");
         int code = requiredInt(current, "weather_code");
         int day = requiredInt(current, "is_day");
@@ -198,6 +191,15 @@ public final class WeatherService {
             throw new IOException("Weather observation is in the future");
         }
         return reading;
+    }
+
+    private void validateUnits(JsonNode units) throws IOException {
+        if (!unit.providerSymbol.equals(requiredText(units, "temperature_2m"))) {
+            throw new IOException("Unexpected weather temperature unit");
+        }
+        if (!"unixtime".equals(requiredText(units, "time"))) {
+            throw new IOException("Unexpected weather time unit");
+        }
     }
 
     private Reading loadCache() {
@@ -277,10 +279,38 @@ public final class WeatherService {
                 || (day != 0 && day != 1)) {
             throw new IOException("Invalid weather values");
         }
-        if (conditionFor(code, day == 1) == null) {
+        if (UNKNOWN_CONDITION.equals(conditionFor(code, day == 1))) {
             throw new IOException("Unknown WMO weather code: " + code);
         }
         return new Reading(temperature, code, day == 1, observedAt, fetchedAt);
+    }
+
+    private static Duration getTwiceOrMaxValue(Duration interval) {
+        Duration twiceInterval;
+        try {
+            twiceInterval = interval.multipliedBy(2);
+        } catch (ArithmeticException ex) {
+            twiceInterval = Duration.ofSeconds(Long.MAX_VALUE);
+        }
+        return twiceInterval;
+    }
+
+    private static void validate(AppConfig.Weather config, Duration interval) {
+        if (areCoordinatesInvalid(config)) {
+            throw new IllegalArgumentException("Invalid weather coordinates");
+        }
+        if (interval.isZero() || interval.isNegative()) {
+            throw new IllegalArgumentException("Weather refresh interval must be positive");
+        }
+    }
+
+    private static boolean areCoordinatesInvalid(AppConfig.Weather config) {
+        return !Double.isFinite(config.latitude())
+                || config.latitude() < -90
+                || config.latitude() > 90
+                || !Double.isFinite(config.longitude())
+                || config.longitude() < -180
+                || config.longitude() > 180;
     }
 
     private boolean tooOld(Instant time, Instant now) {
@@ -362,7 +392,7 @@ public final class WeatherService {
             case 85, 86 -> new Condition("Przelotny śnieg", "❄");
             case 95 -> new Condition("Burza", "⚡");
             case 96, 99 -> new Condition("Burza z gradem", "⚡");
-            default -> null;
+            default -> UNKNOWN_CONDITION;
         };
     }
 
@@ -430,7 +460,9 @@ public final class WeatherService {
         }
     }
 
-    /** The size limit applies while receiving, not after an unbounded allocation. */
+    /**
+     * The size limit applies while receiving, not after an unbounded allocation.
+     */
     static final class LimitedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
         private final int limit;
         private final ByteArrayOutputStream output = new ByteArrayOutputStream();

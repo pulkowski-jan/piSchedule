@@ -1,3 +1,5 @@
+Disclaimer: Large portions of the content of this repository were generated using OpenAI tools. 
+
 # piSchedule
 
 A lightweight, full-screen Swing dashboard for a Raspberry Pi 3 Model B: scheduled tram departures, local time and weather on a small touchscreen. Departures are **scheduled, not live**: delays, cancellations and vehicle positions are outside version one.
@@ -61,6 +63,20 @@ The build includes tests, checks that the bundled JAR contains the SQLite ARM64 
 Copy `build/libs/pischedule-1.0-SNAPSHOT-all.jar` to the Pi as `~/piSchedule/piSchedule.jar`, and copy `config.example.toml` as `~/piSchedule/config.toml`. The JAR without `-all` is a thin JAR and should not be deployed alone. The Shadow configuration preserves SQLite native resources and merges service metadata; verify the resulting JAR on the device. Gradle is not required on the Pi.
 
 Edit the external TOML configuration; `config.example.toml` documents each setting. Relative `cache_directory` paths resolve against the configuration file's directory. Empty line and direction filters mean all lines and directions; GTFS `direction_id` values are meaningful only in the context of a particular line, not universally as geographic directions. Use a UTF-8 editor for Polish names.
+
+### Departure window and logging
+
+```toml
+# Root-level setting: omit it to log to stdout instead.
+log_file = "logs/pischedule.log"
+
+[transit]
+look_ahead_minutes = 120
+```
+
+`transit.look_ahead_minutes` defaults to **120 minutes** and accepts integers from 1 to 10080 (seven days). The timetable SQL query returns only departures from one minute before now through the configured future horizon, inclusive. The one-minute past-departure grace period is unchanged. This also applies to `--check-feed`; a short window may contain fewer than three departures per group or none. Changing the window does not require reimporting the timetable. GTFS after-midnight times and agency time-zone/DST rules are preserved.
+
+`log_file` is optional and resolves relative to the configuration file's directory, like `cache_directory`. Application diagnostics, stack traces and stop-search/feed-check output use the configured log destination. Parent directories are created automatically. Without `log_file`, logging goes to stdout. Configuration/startup errors before a file destination is available, and `--help`, also go to stdout. An unusable configured file is a startup error rather than silently discarding messages. Log files append across runs and are not automatically rotated; configure rotation/retention on the Pi to avoid filling its storage. The configured file is locked while the application is using it; another process trying to use that same file fails startup explicitly rather than silently switching filenames.
 
 Launch from an active X11 session as the dedicated user (press Escape on an attached keyboard to exit):
 
@@ -145,7 +161,7 @@ In the X11 session, `xrandr` shows outputs/modes and `xinput list` shows input d
 ## Data, attribution and operational limits
 
 - The cache is intended to preserve the previous valid database if an update fails, show stale/expired timetable and weather states, and work offline when a usable cache exists; these behaviors still need end-to-end verification. A first start without a valid cache needs network access. Feed errors, outdated schedules, inaccurate clocks and provider outages can make results incomplete; use official sources for consequential travel decisions.
-- Queries look ahead at most 31 days and return at most 200 departures. Frequency-based selected trips, flexible service, approximate selected-stop times, continuous pickup, and conflicting agency time zones are unsupported and cause import to fail rather than produce misleading times. An import also fails if the configured filters match none of the selected-stop departures. Calls requiring phone/driver coordination cause import to fail; arrival-only calls are omitted. The cache filesystem must support atomic replacement and file locking.
+- Queries use the configured look-ahead window (default 120 minutes, maximum seven days). Raw snapshots return at most 200 departures; dashboard snapshots select up to 200 groups with up to ten buffered departures per group. Frequency-based selected trips, flexible service, approximate selected-stop times, continuous pickup, and conflicting agency time zones are unsupported and cause import to fail rather than produce misleading times. An import also fails if the configured filters match none of the selected-stop departures. Calls requiring phone/driver coordination cause import to fail; arrival-only calls are omitted. The cache filesystem must support atomic replacement and file locking.
 - Timetable caches are scoped to the feed, stop selection and filters. Changing those settings requires a successful import before the changed configuration can work offline, and old cache files may need manual cleanup. Stop search tries to download the current feed and warns if it falls back to a cached archive.
 - Downloads have size, connect, read and body-duration limits, but a slowly trickling HTTP response can exceed the intended total duration; shutdown waits briefly for background cleanup rather than guaranteeing it.
 - No on-screen settings, settings web server, authentication, remote administration, process supervision or kiosk hardening are promised. Restrict SSH/network access, keep packages updated, protect configuration and writable directories, and run as an unprivileged user. Treat provider data and configurable URLs as untrusted; use HTTPS and reasonable download limits when implemented. Autologin plus physical access allows local use of the account.

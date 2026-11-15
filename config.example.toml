@@ -1,10 +1,15 @@
 # Copy to config.toml and edit as needed. Missing settings use the defaults below.
 # Relative paths are resolved against the directory containing this file.
 cache_directory = "cache"
+# Omit log_file to log to stdout instead of a file.
+# log_file = "logs/pischedule.log"
 
 [transit]
 url = "https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip"
 update_interval_minutes = 1440
+# Show departures within the next 120 minutes (1..10080); the past-departure
+# grace period is unaffected by this future look-ahead window.
+look_ahead_minutes = 120
 stop_name = "Łagiewniki"
 # Empty means resolve the exact stop name and associated platforms. Explicit IDs
 # can be discovered from the feed; none are assumed without inspecting it.

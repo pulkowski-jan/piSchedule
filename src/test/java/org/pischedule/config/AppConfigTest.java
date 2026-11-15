@@ -2,6 +2,7 @@ package org.pischedule.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -36,6 +37,7 @@ class AppConfigTest {
         AppConfig config = load("");
         assertEquals("https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip", config.transit().url());
         assertEquals(Duration.ofDays(1), config.transit().updateInterval());
+        assertEquals(Duration.ofMinutes(120), config.transit().lookAhead());
         assertEquals("Łagiewniki", config.transit().stopName());
         assertEquals(List.of(), config.transit().stopIds());
         assertEquals(List.of(), config.transit().lines());
@@ -52,6 +54,8 @@ class AppConfigTest {
         assertEquals(1.0, config.display().textScale());
         assertEquals(6, config.display().departureLimit());
         assertEquals(temporaryDirectory.resolve("cache"), config.cacheDirectory());
+        assertNull(config.logFile());
+        assertFalse(Files.exists(temporaryDirectory.resolve("logs")));
     }
 
     @Test
@@ -61,6 +65,7 @@ class AppConfigTest {
         assertEquals(defaults.transit(), example.transit());
         assertEquals(defaults.weather(), example.weather());
         assertEquals(defaults.display(), example.display());
+        assertNull(example.logFile());
         assertEquals(
                 Path.of("config.example.toml").toAbsolutePath().getParent().resolve("cache"),
                 example.cacheDirectory());
@@ -72,9 +77,11 @@ class AppConfigTest {
                 load(
                         """
                         cache_directory = "../store"
+                        log_file = "logs/../pischedule.log"
                         [transit]
                         url = "https://example.org/feed.zip"
                         update_interval_minutes = 30
+                        look_ahead_minutes = 45
                         stop_name = "Station"
                         stop_ids = ["p1", "p2"]
                         lines = ["8", "50.1"]
@@ -99,6 +106,9 @@ class AppConfigTest {
         assertEquals(temporaryDirectory.resolve("../store").normalize(), config.cacheDirectory());
         assertEquals("https://example.org/feed.zip", config.transit().url());
         assertEquals(Duration.ofMinutes(30), config.transit().updateInterval());
+        assertEquals(Duration.ofMinutes(45), config.transit().lookAhead());
+        assertEquals(temporaryDirectory.resolve("pischedule.log"), config.logFile());
+        assertFalse(Files.exists(config.logFile()));
         assertEquals("Station", config.transit().stopName());
         assertEquals(List.of("p1", "p2"), config.transit().stopIds());
         assertEquals(List.of("8", "50.1"), config.transit().lines());
@@ -126,6 +136,68 @@ class AppConfigTest {
     }
 
     @Test
+    void logPathIsResolvedAgainstConfigurationDirectory() throws IOException {
+        Path directory = Files.createDirectory(temporaryDirectory.resolve("nested"));
+        Path path = directory.resolve("settings.toml");
+        Files.writeString(path, "log_file = '../logs/pischedule.log'\n");
+        assertEquals(
+                temporaryDirectory.resolve("logs/pischedule.log"), AppConfig.load(path).logFile());
+    }
+
+    @Test
+    void absoluteLogPathIsNotResolvedAgainstConfig() throws IOException {
+        Path absolute = temporaryDirectory.resolve("absolute.log");
+        AppConfig config = load("log_file = '" + absolute + "'\n");
+        assertEquals(absolute, config.logFile());
+        assertFalse(Files.exists(absolute));
+    }
+
+    @Test
+    void acceptsLookAheadParsingBounds() throws IOException {
+        assertEquals(
+                Duration.ofMinutes(1),
+                load("[transit]\nlook_ahead_minutes = 1").transit().lookAhead());
+        assertEquals(
+                Duration.ofDays(7),
+                load("[transit]\nlook_ahead_minutes = 10080").transit().lookAhead());
+    }
+
+    @Test
+    void legacyAppConfigConstructorDefaultsToStdout() throws IOException {
+        AppConfig defaults = load("");
+        AppConfig config =
+                new AppConfig(
+                        defaults.transit(),
+                        defaults.weather(),
+                        defaults.display(),
+                        defaults.cacheDirectory());
+        assertNull(config.logFile());
+    }
+
+    @Test
+    void transitConstructorValidatesLookAhead() {
+        for (Duration invalid :
+                List.of(Duration.ZERO, Duration.ofNanos(-1), Duration.ofDays(7).plusNanos(1))) {
+            assertThrows(IllegalArgumentException.class, () -> transitWithLookAhead(invalid));
+        }
+        assertThrows(IllegalArgumentException.class, () -> transitWithLookAhead(null));
+        assertEquals(Duration.ofNanos(1), transitWithLookAhead(Duration.ofNanos(1)).lookAhead());
+        assertEquals(Duration.ofDays(7), transitWithLookAhead(Duration.ofDays(7)).lookAhead());
+    }
+
+    private AppConfig.Transit transitWithLookAhead(Duration lookAhead) {
+        return new AppConfig.Transit(
+                "https://example.org",
+                Duration.ofHours(1),
+                "Station",
+                List.of(),
+                List.of(),
+                Map.of(),
+                Map.of(),
+                lookAhead);
+    }
+
+    @Test
     void transitDefensivelyCopiesNestedCollections() {
         List<String> stops = new ArrayList<>(List.of("one"));
         List<String> destinations = new ArrayList<>(List.of("Center"));
@@ -147,6 +219,7 @@ class AppConfigTest {
         destinations.add("Other");
         ids.add(1);
         headsigns.clear();
+        assertEquals(Duration.ofMinutes(120), transit.lookAhead());
         assertEquals(List.of("one"), transit.stopIds());
         assertEquals(Map.of("8", List.of("Center")), transit.headsigns());
         assertEquals(Map.of("8", List.of(0)), transit.directionIds());
@@ -175,6 +248,19 @@ class AppConfigTest {
                 Arguments.of(
                         "[transit]\nupdate_interval_minutes = 2147483648",
                         "transit.update_interval_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = 0", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = -1", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = 10081", "transit.look_ahead_minutes"),
+                Arguments.of(
+                        "[transit]\nlook_ahead_minutes = 9223372036854775807",
+                        "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = 1.5", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = 120.0", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = '120'", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = true", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = []", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahead_minutes = {}", "transit.look_ahead_minutes"),
+                Arguments.of("[transit]\nlook_ahed_minutes = 120", "transit.look_ahed_minutes"),
                 Arguments.of("[transit]\nstop_name = ' '", "transit.stop_name"),
                 Arguments.of("[transit]\nstop_ids = [3]", "transit.stop_ids[0]"),
                 Arguments.of("[transit]\nlines = '8'", "transit.lines"),
@@ -199,7 +285,17 @@ class AppConfigTest {
                 Arguments.of("[display]\ndeparture_limit = 1.5", "display.departure_limit"),
                 Arguments.of("[display]\ndeparture_limt = 5", "display.departure_limt"),
                 Arguments.of("weather = 'Krakow'", "weather"),
-                Arguments.of("cache_directory = ''", "cache_directory"));
+                Arguments.of("cache_directory = ''", "cache_directory"),
+                Arguments.of("log_file = ''", "log_file"),
+                Arguments.of("log_file = '   '", "log_file"),
+                Arguments.of("log_file = 120", "log_file"),
+                Arguments.of("log_file = true", "log_file"),
+                Arguments.of("log_file = []", "log_file"),
+                Arguments.of("log_file = {}", "log_file"),
+                Arguments.of("log_file = \"logs/\\u0000bad.log\"", "log_file"),
+                Arguments.of("log_flie = 'app.log'", "log_flie"),
+                Arguments.of("look_ahead_minutes = 120", "look_ahead_minutes"),
+                Arguments.of("[transit]\nlog_file = 'app.log'", "transit.log_file"));
     }
 
     @Test
